@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Home from "./components/Home.jsx";
+import NotesSection from "./components/NotesSection.jsx";
 import {
   addDays,
   completionKey,
@@ -17,7 +18,41 @@ const STORAGE_KEYS = {
   bestStreak: "kaizen:v1:bestStreak",
   lastCheckedDate: "kaizen:v1:lastCheckedDate",
   creditedDates: "kaizen:v1:creditedDates",
+  sectionNotes: "kaizen:v1:sectionNotes",
 };
+
+const SECTIONS = {
+  knowledge: {
+    key: "knowledge",
+    title: "Knowledge",
+    eyebrow: "Biblioteca",
+    emptyMessage: "Nessuna nota salvata in Knowledge.",
+  },
+  skills: {
+    key: "skills",
+    title: "Skills",
+    eyebrow: "Crescita",
+    emptyMessage: "Nessuna nota salvata in Skills.",
+  },
+  home: {
+    key: "home",
+    title: "Home",
+  },
+  sharkmo: {
+    key: "sharkmo",
+    title: "Sharkmo",
+    eyebrow: "Progetto",
+    emptyMessage: "Nessuna nota salvata in Sharkmo.",
+  },
+};
+
+function createId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 function reconcileStreak({
   tasks,
@@ -103,6 +138,10 @@ export default function App() {
   const [creditedDates, setCreditedDates] = useState(() =>
     readStorage(STORAGE_KEYS.creditedDates, {}),
   );
+  const [activeSection, setActiveSection] = useState(SECTIONS.home.key);
+  const [sectionNotes, setSectionNotes] = useState(() =>
+    readStorage(STORAGE_KEYS.sectionNotes, []),
+  );
 
   const today = useMemo(() => dateKey(), []);
   const todaysTasks = useMemo(
@@ -131,6 +170,10 @@ export default function App() {
   useEffect(
     () => writeStorage(STORAGE_KEYS.creditedDates, creditedDates),
     [creditedDates],
+  );
+  useEffect(
+    () => writeStorage(STORAGE_KEYS.sectionNotes, sectionNotes),
+    [sectionNotes],
   );
 
   useEffect(() => {
@@ -207,18 +250,84 @@ export default function App() {
     }));
   }
 
+  function saveSectionNote(section, noteInput) {
+    const now = new Date().toISOString();
+    const cleanTitle = noteInput.title.trim();
+    const cleanContent = noteInput.content.trim();
+
+    if (!cleanTitle && !cleanContent) {
+      return;
+    }
+
+    setSectionNotes((currentNotes) => {
+      if (noteInput.id) {
+        return currentNotes.map((note) =>
+          note.id === noteInput.id
+            ? {
+                ...note,
+                title: cleanTitle,
+                content: cleanContent,
+                updatedAt: now,
+              }
+            : note,
+        );
+      }
+
+      return [
+        {
+          id: createId(),
+          section,
+          title: cleanTitle,
+          content: cleanContent,
+          createdAt: now,
+          updatedAt: now,
+        },
+        ...currentNotes,
+      ];
+    });
+  }
+
+  function deleteSectionNote(noteId) {
+    setSectionNotes((currentNotes) =>
+      currentNotes.filter((note) => note.id !== noteId),
+    );
+  }
+
+  const activeSectionConfig = SECTIONS[activeSection];
+  const activeSectionNotes = sectionNotes.filter(
+    (note) => note.section === activeSection,
+  );
+
+  if (activeSection === SECTIONS.home.key) {
+    return (
+      <Home
+        activeSection={activeSection}
+        bestStreak={bestStreak}
+        completions={completions}
+        currentStreak={currentStreak}
+        date={today}
+        note={notes[today] || ""}
+        onAddTask={addTask}
+        onDeleteTask={deleteTask}
+        onNavigate={setActiveSection}
+        onNoteChange={updateTodayNote}
+        onToggleTask={toggleTask}
+        tasks={todaysTasks}
+      />
+    );
+  }
+
   return (
-    <Home
-      bestStreak={bestStreak}
-      completions={completions}
-      currentStreak={currentStreak}
-      date={today}
-      note={notes[today] || ""}
-      onAddTask={addTask}
-      onDeleteTask={deleteTask}
-      onNoteChange={updateTodayNote}
-      onToggleTask={toggleTask}
-      tasks={todaysTasks}
+    <NotesSection
+      activeSection={activeSection}
+      emptyMessage={activeSectionConfig.emptyMessage}
+      eyebrow={activeSectionConfig.eyebrow}
+      notes={activeSectionNotes}
+      onDeleteNote={deleteSectionNote}
+      onNavigate={setActiveSection}
+      onSaveNote={(note) => saveSectionNote(activeSection, note)}
+      section={activeSection}
+      title={activeSectionConfig.title}
     />
   );
 }
