@@ -7,6 +7,7 @@ import TodoList from "./TodoList.jsx";
 import { formatDisplayDate } from "../utils/date.js";
 
 export default function Home({
+  activeSection,
   bestStreak,
   completions,
   currentStreak,
@@ -14,6 +15,7 @@ export default function Home({
   note,
   onAddTask,
   onDeleteTask,
+  onNavigate,
   onNoteChange,
   onToggleTask,
   tasks,
@@ -51,7 +53,7 @@ export default function Home({
         <DailyNotes note={note} onChange={onNoteChange} />
       </main>
 
-      <BottomNav />
+      <BottomNav activeSection={activeSection} onNavigate={onNavigate} />
 
       {isAddingTask && (
         <AddTaskModal

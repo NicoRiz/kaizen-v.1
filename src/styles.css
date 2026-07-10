@@ -34,7 +34,7 @@ button {
 
 .app-shell {
   min-height: 100vh;
-  padding: 20px 16px 92px;
+  padding: 20px 16px 116px;
 }
 
 .home {
@@ -323,6 +323,8 @@ h2 {
 }
 
 .notes-panel textarea:focus,
+.note-form input:focus,
+.note-form textarea:focus,
 .task-form input:focus,
 .task-form select:focus {
   border-color: rgba(116, 27, 52, 0.5);
@@ -338,27 +340,81 @@ h2 {
   transform: translateX(-50%);
 }
 
-.bottom-nav a {
-  display: flex;
+.bottom-nav-inner {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.18fr 1fr;
   align-items: center;
-  justify-content: center;
-  gap: 9px;
-  min-height: 58px;
+  gap: 4px;
+  min-height: 70px;
+  padding: 8px;
   border: 1px solid rgba(52, 33, 37, 0.1);
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.94);
-  color: #741b34;
-  font-weight: 850;
-  text-decoration: none;
   box-shadow: 0 16px 40px rgba(55, 35, 32, 0.14);
   backdrop-filter: blur(12px);
 }
 
-.home-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 4px;
+.bottom-nav-link {
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 54px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: #8a7b77;
+  font-size: 0.66rem;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.bottom-nav-link.is-active {
+  color: #741b34;
+  background: #f5ede8;
+}
+
+.bottom-nav-link--home {
+  min-height: 62px;
+  transform: translateY(-8px);
+  background: #2d2022;
+  color: #fff;
+  box-shadow: 0 14px 26px rgba(45, 32, 34, 0.2);
+}
+
+.bottom-nav-link--home.is-active {
   background: #741b34;
+  color: #fff;
+}
+
+.nav-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+
+.bottom-nav-link--home .nav-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.nav-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.nav-label {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-backdrop {
@@ -397,7 +453,13 @@ h2 {
   gap: 14px;
 }
 
+.note-form {
+  display: grid;
+  gap: 14px;
+}
+
 .task-form label,
+.note-form label,
 .task-form fieldset {
   display: grid;
   gap: 8px;
@@ -407,15 +469,30 @@ h2 {
 }
 
 .task-form input,
-.task-form select {
+.task-form select,
+.note-form input,
+.note-form textarea {
   width: 100%;
-  height: 46px;
   border: 1px solid #e2d8d0;
   border-radius: 12px;
-  padding: 0 12px;
   outline: none;
   color: #2f2526;
   background: #fffdfa;
+}
+
+.task-form input,
+.task-form select,
+.note-form input {
+  height: 46px;
+  padding: 0 12px;
+}
+
+.note-form textarea {
+  min-height: 210px;
+  resize: vertical;
+  padding: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .task-form fieldset {
@@ -469,6 +546,95 @@ h2 {
   box-shadow: 0 16px 30px rgba(116, 27, 52, 0.22);
 }
 
+.submit-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+  box-shadow: none;
+}
+
+.secondary-button {
+  min-height: 50px;
+  border: 1px solid #e2d8d0;
+  border-radius: 14px;
+  background: #fffdfa;
+  color: #5d504d;
+  font-weight: 850;
+}
+
+.modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.section-topbar h1 {
+  font-size: clamp(2.15rem, 10vw, 4.15rem);
+}
+
+.note-list {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.note-card {
+  display: grid;
+  grid-template-columns: 1fr 38px;
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid #ece3dc;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.note-card-main {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 0;
+  border-radius: 14px;
+  padding: 14px;
+  background: transparent;
+  text-align: left;
+}
+
+.note-card-main:hover {
+  background: #fffdfa;
+}
+
+.note-card-main span {
+  color: #8b7e79;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.note-card-main strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #2c2122;
+  font-size: 1rem;
+}
+
+.note-card-main p {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #746967;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.note-card > .delete-button {
+  align-self: start;
+  margin: 10px 8px 0 0;
+}
+
 @media (min-width: 720px) {
   .app-shell {
     padding-top: 40px;
@@ -494,5 +660,23 @@ h2 {
 
   .weekday-grid {
     grid-template-columns: repeat(4, 1fr);
+  }
+
+  .bottom-nav {
+    bottom: 10px;
+    width: min(calc(100% - 20px), 760px);
+  }
+
+  .bottom-nav-inner {
+    gap: 2px;
+    padding: 7px;
+  }
+
+  .bottom-nav-link {
+    font-size: 0.6rem;
+  }
+
+  .modal-actions {
+    grid-template-columns: 1fr;
   }
 }
