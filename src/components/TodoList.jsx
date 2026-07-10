@@ -8,6 +8,10 @@ export default function TodoList({
   onToggleTask,
   tasks,
 }) {
+  const completedTasks = tasks.filter((task) =>
+    Boolean(completions[completionKey(date, task.id)]),
+  ).length;
+
   return (
     <section className="panel">
       <div className="section-heading">
@@ -15,7 +19,11 @@ export default function TodoList({
           <p className="eyebrow">Oggi</p>
           <h2>To Do List</h2>
         </div>
-        <span className="counter">{tasks.length}</span>
+        <span className="counter task-counter">
+          <strong>{completedTasks}</strong>
+          <span>/</span>
+          <span>{tasks.length}</span>
+        </span>
       </div>
 
       {tasks.length === 0 ? (
