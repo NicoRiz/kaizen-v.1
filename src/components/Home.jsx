@@ -36,7 +36,8 @@ export default function Home({
             onClick={() => setIsAddingTask(true)}
             type="button"
           >
-            +
+            <span aria-hidden="true">+</span>
+            Nuova task
           </button>
         </header>
 

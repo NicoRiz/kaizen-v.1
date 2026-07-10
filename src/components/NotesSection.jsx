@@ -54,7 +54,8 @@ export default function NotesSection({
             onClick={openNewNote}
             type="button"
           >
-            +
+            <span aria-hidden="true">+</span>
+            Nuova nota
           </button>
         </header>
 
