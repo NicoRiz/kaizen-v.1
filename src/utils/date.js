@@ -49,9 +49,21 @@ export function getTasksForDate(tasks, value) {
 
   return tasks.filter((task) => {
     const repeatDays = task.repeatDays || [];
+    const postponedDates = task.postponedDates || {};
+    const carryoverDates = Array.isArray(task.carryoverDates)
+      ? task.carryoverDates
+      : [];
 
     if (repeatDays.length > 0) {
-      return !isBeforeDate(value, task.date) && repeatDays.includes(targetDay);
+      if (postponedDates[value]) {
+        return false;
+      }
+
+      const isScheduled =
+        !isBeforeDate(value, task.date) && repeatDays.includes(targetDay);
+      const isCarryover = carryoverDates.includes(value);
+
+      return isScheduled || isCarryover;
     }
 
     return task.date === value;

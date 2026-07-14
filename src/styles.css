@@ -223,7 +223,7 @@ h2 {
 
 .task-item {
   display: grid;
-  grid-template-columns: 30px 1fr 36px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   min-height: 72px;
@@ -289,10 +289,17 @@ h2 {
   font-size: 0.98rem;
 }
 
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 7px;
+}
+
 .task-type {
   display: inline-flex;
   width: fit-content;
-  margin-top: 7px;
   padding: 4px 8px;
   border-radius: 999px;
   color: #5f5351;
@@ -319,6 +326,42 @@ h2 {
 .task-type--health {
   background: #f2e7c9;
   color: #745922;
+}
+
+.postpone-badge {
+  display: inline-flex;
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f5ede8;
+  color: #741b34;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.task-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.postpone-button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e2d8d0;
+  border-radius: 999px;
+  background: #fffdfa;
+  color: #741b34;
+  font-size: 0.76rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.postpone-button:hover {
+  border-color: rgba(116, 27, 52, 0.35);
+  background: #f5ede8;
 }
 
 .delete-button,
@@ -377,7 +420,7 @@ h2 {
 
 .bottom-nav-inner {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   align-items: center;
   gap: 4px;
   min-height: 62px;
@@ -678,7 +721,17 @@ h2 {
   .bottom-nav-link {
     min-height: 44px;
     padding: 0 4px;
-    font-size: 0.72rem;
+    font-size: 0.68rem;
+  }
+
+  .task-item {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .task-actions {
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .modal-actions {
@@ -697,6 +750,6 @@ h2 {
   }
 
   .bottom-nav-link {
-    font-size: 0.68rem;
+    font-size: 0.62rem;
   }
 }

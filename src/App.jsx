@@ -44,6 +44,12 @@ const SECTIONS = {
     eyebrow: "Progetto",
     emptyMessage: "Nessuna nota salvata in Sharkmo.",
   },
+  oneiros: {
+    key: "oneiros",
+    title: "Oneiros",
+    eyebrow: "Sogni",
+    emptyMessage: "Nessun sogno salvato in Oneiros.",
+  },
 };
 
 function createId() {
@@ -216,6 +222,7 @@ export default function App() {
       {
         ...task,
         id: crypto.randomUUID(),
+        postponeCount: 0,
         createdAt: new Date().toISOString(),
       },
     ]);
@@ -241,6 +248,56 @@ export default function App() {
         ),
       ),
     );
+  }
+
+  function postponeTask(taskId) {
+    const tomorrow = addDays(today, 1);
+
+    setTasks((currentTasks) =>
+      currentTasks.map((task) => {
+        if (task.id !== taskId) {
+          return task;
+        }
+
+        const repeatDays = task.repeatDays || [];
+        const postponeCount = (Number(task.postponeCount) || 0) + 1;
+
+        if (repeatDays.length === 0) {
+          return {
+            ...task,
+            date: tomorrow,
+            postponeCount,
+          };
+        }
+
+        const carryoverDates = Array.isArray(task.carryoverDates)
+          ? task.carryoverDates
+          : [];
+        const nextCarryoverDates = carryoverDates.filter(
+          (carryoverDate) => carryoverDate !== today,
+        );
+
+        if (!nextCarryoverDates.includes(tomorrow)) {
+          nextCarryoverDates.push(tomorrow);
+        }
+
+        return {
+          ...task,
+          postponeCount,
+          postponedDates: {
+            ...(task.postponedDates || {}),
+            [today]: true,
+          },
+          carryoverDates: nextCarryoverDates,
+        };
+      }),
+    );
+
+    setCompletions((currentCompletions) => {
+      const nextCompletions = { ...currentCompletions };
+      delete nextCompletions[completionKey(today, taskId)];
+      return nextCompletions;
+    });
   }
 
   function updateTodayNote(value) {
@@ -311,6 +368,7 @@ export default function App() {
         onDeleteTask={deleteTask}
         onNavigate={setActiveSection}
         onNoteChange={updateTodayNote}
+        onPostponeTask={postponeTask}
         onToggleTask={toggleTask}
         tasks={todaysTasks}
       />

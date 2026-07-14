@@ -15,6 +15,10 @@ const NAV_ITEMS = [
     key: "sharkmo",
     label: "Sharkmo",
   },
+  {
+    key: "oneiros",
+    label: "Oneiros",
+  },
 ];
 
 export default function BottomNav({ activeSection = "home", onNavigate }) {

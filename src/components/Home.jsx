@@ -17,6 +17,7 @@ export default function Home({
   onDeleteTask,
   onNavigate,
   onNoteChange,
+  onPostponeTask,
   onToggleTask,
   tasks,
 }) {
@@ -47,6 +48,7 @@ export default function Home({
           completions={completions}
           date={date}
           onDeleteTask={onDeleteTask}
+          onPostponeTask={onPostponeTask}
           onToggleTask={onToggleTask}
           tasks={tasks}
         />

@@ -5,6 +5,7 @@ export default function TodoList({
   completions,
   date,
   onDeleteTask,
+  onPostponeTask,
   onToggleTask,
   tasks,
 }) {
@@ -34,6 +35,7 @@ export default function TodoList({
         <ul className="task-list">
           {tasks.map((task) => {
             const isCompleted = Boolean(completions[completionKey(date, task.id)]);
+            const postponeCount = Number(task.postponeCount) || 0;
 
             return (
               <li
@@ -51,19 +53,38 @@ export default function TodoList({
 
                 <div className="task-content">
                   <strong>{task.title}</strong>
-                  <small className={`task-type task-type--${task.type}`}>
-                    {getTaskTypeLabel(task.type)}
-                  </small>
+                  <div className="task-meta">
+                    <small className={`task-type task-type--${task.type}`}>
+                      {getTaskTypeLabel(task.type)}
+                    </small>
+                    {postponeCount > 0 && (
+                      <small className="postpone-badge">
+                        ↻ Rimandata {postponeCount}{" "}
+                        {postponeCount === 1 ? "volta" : "volte"}
+                      </small>
+                    )}
+                  </div>
                 </div>
 
-                <button
-                  aria-label={`Elimina ${task.title}`}
-                  className="delete-button"
-                  onClick={() => onDeleteTask(task.id)}
-                  type="button"
-                >
-                  x
-                </button>
+                <div className="task-actions">
+                  {!isCompleted && (
+                    <button
+                      className="postpone-button"
+                      onClick={() => onPostponeTask(task.id)}
+                      type="button"
+                    >
+                      Oggi no
+                    </button>
+                  )}
+                  <button
+                    aria-label={`Elimina ${task.title}`}
+                    className="delete-button"
+                    onClick={() => onDeleteTask(task.id)}
+                    type="button"
+                  >
+                    x
+                  </button>
+                </div>
               </li>
             );
           })}
