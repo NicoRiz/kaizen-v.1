@@ -12,16 +12,29 @@ export default function Home({
   completions,
   currentStreak,
   date,
+  isAnalyzingJournal,
+  journalAnalyses,
+  journalAnalysis,
+  journalAnalysisError,
   note,
+  notes,
   onAddTask,
+  onAnalyzeJournal,
   onDeleteTask,
   onNavigate,
   onNoteChange,
   onPostponeTask,
+  onSaveJournal,
   onToggleTask,
   tasks,
 }) {
   const [isAddingTask, setIsAddingTask] = useState(false);
+  const [suggestedTask, setSuggestedTask] = useState(null);
+
+  function closeTaskModal() {
+    setIsAddingTask(false);
+    setSuggestedTask(null);
+  }
 
   return (
     <div className="app-shell">
@@ -53,19 +66,37 @@ export default function Home({
           tasks={tasks}
         />
 
-        <DailyNotes note={note} onChange={onNoteChange} />
+        <DailyNotes
+          analyses={journalAnalyses}
+          analysis={journalAnalysis}
+          error={journalAnalysisError}
+          isAnalyzing={isAnalyzingJournal}
+          note={note}
+          notes={notes}
+          onAddSuggestedStep={(step) =>
+            setSuggestedTask({
+              title: step.title || step.description,
+              type: "growth",
+            })
+          }
+          onAnalyze={onAnalyzeJournal}
+          onChange={onNoteChange}
+          onSaveJournal={onSaveJournal}
+        />
       </main>
 
       <BottomNav activeSection={activeSection} onNavigate={onNavigate} />
 
-      {isAddingTask && (
+      {(isAddingTask || suggestedTask) && (
         <AddTaskModal
           date={date}
-          onClose={() => setIsAddingTask(false)}
+          initialTask={suggestedTask}
+          onClose={closeTaskModal}
           onSubmit={(task) => {
             onAddTask(task);
-            setIsAddingTask(false);
+            closeTaskModal();
           }}
+          requireDateChoice={Boolean(suggestedTask)}
         />
       )}
     </div>

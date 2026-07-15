@@ -2,10 +2,18 @@ import { useState } from "react";
 import { TASK_TYPES } from "../constants/tasks.js";
 import { WEEK_DAYS } from "../utils/date.js";
 
-export default function AddTaskModal({ date, onClose, onSubmit }) {
-  const [title, setTitle] = useState("");
-  const [taskDate, setTaskDate] = useState(date);
-  const [type, setType] = useState(TASK_TYPES[0].value);
+export default function AddTaskModal({
+  date,
+  initialTask,
+  onClose,
+  onSubmit,
+  requireDateChoice = false,
+}) {
+  const [title, setTitle] = useState(initialTask?.title || "");
+  const [taskDate, setTaskDate] = useState(
+    requireDateChoice ? "" : initialTask?.date || date,
+  );
+  const [type, setType] = useState(initialTask?.type || TASK_TYPES[0].value);
   const [repeatDays, setRepeatDays] = useState([]);
 
   function toggleRepeatDay(day) {
@@ -19,7 +27,7 @@ export default function AddTaskModal({ date, onClose, onSubmit }) {
   function handleSubmit(event) {
     event.preventDefault();
 
-    if (!title.trim()) {
+    if (!title.trim() || !taskDate) {
       return;
     }
 
@@ -67,6 +75,7 @@ export default function AddTaskModal({ date, onClose, onSubmit }) {
             Data
             <input
               onChange={(event) => setTaskDate(event.target.value)}
+              required
               type="date"
               value={taskDate}
             />

@@ -9,11 +9,17 @@ import {
   isBeforeDate,
 } from "./utils/date.js";
 import { readStorage, writeStorage } from "./utils/storage.js";
+import {
+  getPreviousJournalEntries,
+  JOURNAL_ANALYSES_STORAGE_KEY,
+  normalizeJournalAnalysis,
+} from "./lib/journal.js";
 
 const STORAGE_KEYS = {
   tasks: "kaizen:v1:tasks",
   completions: "kaizen:v1:taskCompletions",
   notes: "kaizen:v1:dailyNotes",
+  journalAnalyses: JOURNAL_ANALYSES_STORAGE_KEY,
   streak: "kaizen:v1:currentStreak",
   bestStreak: "kaizen:v1:bestStreak",
   lastCheckedDate: "kaizen:v1:lastCheckedDate",
@@ -132,6 +138,9 @@ export default function App() {
     readStorage(STORAGE_KEYS.completions, {}),
   );
   const [notes, setNotes] = useState(() => readStorage(STORAGE_KEYS.notes, {}));
+  const [journalAnalyses, setJournalAnalyses] = useState(() =>
+    readStorage(STORAGE_KEYS.journalAnalyses, {}),
+  );
   const [currentStreak, setCurrentStreak] = useState(() =>
     readStorage(STORAGE_KEYS.streak, 0),
   );
@@ -148,6 +157,8 @@ export default function App() {
   const [sectionNotes, setSectionNotes] = useState(() =>
     readStorage(STORAGE_KEYS.sectionNotes, []),
   );
+  const [isAnalyzingJournal, setIsAnalyzingJournal] = useState(false);
+  const [journalAnalysisError, setJournalAnalysisError] = useState("");
 
   const today = useMemo(() => dateKey(), []);
   const todaysTasks = useMemo(
@@ -161,6 +172,10 @@ export default function App() {
     [completions],
   );
   useEffect(() => writeStorage(STORAGE_KEYS.notes, notes), [notes]);
+  useEffect(
+    () => writeStorage(STORAGE_KEYS.journalAnalyses, journalAnalyses),
+    [journalAnalyses],
+  );
   useEffect(
     () => writeStorage(STORAGE_KEYS.streak, currentStreak),
     [currentStreak],
@@ -301,10 +316,101 @@ export default function App() {
   }
 
   function updateTodayNote(value) {
+    updateJournalNote(today, value);
+  }
+
+  function updateJournalNote(targetDate, value) {
     setNotes((currentNotes) => ({
       ...currentNotes,
-      [today]: value,
+      [targetDate]: value,
     }));
+  }
+
+  function buildJournalAnalysisPayload() {
+    const skillsNotes = sectionNotes
+      .filter((note) => note.section === SECTIONS.skills.key)
+      .map((note) => ({
+        title: note.title,
+        content: note.content,
+        updatedAt: note.updatedAt,
+      }));
+    const taskSnapshots = todaysTasks.map((task) => {
+      const completed = Boolean(completions[completionKey(today, task.id)]);
+
+      return {
+        title: task.title,
+        type: task.type,
+        postponeCount: Number(task.postponeCount) || 0,
+        completed,
+      };
+    });
+
+    return {
+      date: today,
+      journal: notes[today] || "",
+      tasks: {
+        planned: taskSnapshots,
+        completed: taskSnapshots.filter((task) => task.completed),
+        uncompleted: taskSnapshots.filter((task) => !task.completed),
+        postponementCount: taskSnapshots.reduce(
+          (total, task) => total + task.postponeCount,
+          0,
+        ),
+      },
+      previousJournals: getPreviousJournalEntries(notes, today, 7),
+      skillsNotes,
+    };
+  }
+
+  async function analyzeTodayJournal() {
+    if (isAnalyzingJournal || !(notes[today] || "").trim()) {
+      return;
+    }
+
+    setIsAnalyzingJournal(true);
+    setJournalAnalysisError("");
+
+    try {
+      const response = await fetch("/api/analyze-journal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(buildJournalAnalysisPayload()),
+      });
+      const body = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          body.error || "Non sono riuscito ad analizzare il journal.",
+        );
+      }
+
+      const normalized = normalizeJournalAnalysis(body.analysis);
+
+      if (!normalized) {
+        throw new Error("La risposta di Kaizen Analyst non è valida.");
+      }
+
+      const now = new Date().toISOString();
+
+      setJournalAnalyses((currentAnalyses) => ({
+        ...currentAnalyses,
+        [today]: {
+          ...normalized,
+          createdAt: currentAnalyses[today]?.createdAt || now,
+          updatedAt: now,
+        },
+      }));
+    } catch (error) {
+      setJournalAnalysisError(
+        error instanceof Error
+          ? error.message
+          : "Non sono riuscito ad analizzare il journal.",
+      );
+    } finally {
+      setIsAnalyzingJournal(false);
+    }
   }
 
   function saveSectionNote(section, noteInput) {
@@ -363,13 +469,20 @@ export default function App() {
         completions={completions}
         currentStreak={currentStreak}
         date={today}
+        journalAnalyses={journalAnalyses}
+        journalAnalysis={journalAnalyses[today]}
+        journalAnalysisError={journalAnalysisError}
         note={notes[today] || ""}
         onAddTask={addTask}
+        onAnalyzeJournal={analyzeTodayJournal}
         onDeleteTask={deleteTask}
         onNavigate={setActiveSection}
         onNoteChange={updateTodayNote}
         onPostponeTask={postponeTask}
+        onSaveJournal={updateJournalNote}
         onToggleTask={toggleTask}
+        isAnalyzingJournal={isAnalyzingJournal}
+        notes={notes}
         tasks={todaysTasks}
       />
     );
