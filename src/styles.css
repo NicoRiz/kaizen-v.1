@@ -289,6 +289,51 @@ h2 {
   font-size: 0.98rem;
 }
 
+.task-description {
+  display: grid;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 5px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #6f6260;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.task-description span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #6f6260;
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.task-description.is-expanded span {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.task-description small {
+  color: #741b34;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.task-description:focus-visible {
+  border-radius: 8px;
+  outline: 3px solid rgba(116, 27, 52, 0.18);
+  outline-offset: 3px;
+}
+
 .task-meta {
   display: flex;
   flex-wrap: wrap;
@@ -404,7 +449,8 @@ h2 {
 .note-form input:focus,
 .note-form textarea:focus,
 .task-form input:focus,
-.task-form select:focus {
+.task-form select:focus,
+.task-form textarea:focus {
   border-color: rgba(116, 27, 52, 0.5);
   box-shadow: 0 0 0 4px rgba(116, 27, 52, 0.1);
 }
@@ -516,6 +562,7 @@ h2 {
 
 .task-form input,
 .task-form select,
+.task-form textarea,
 .note-form input,
 .note-form textarea {
   width: 100%;
@@ -531,6 +578,13 @@ h2 {
 .note-form input {
   height: 46px;
   padding: 0 12px;
+}
+
+.task-form textarea {
+  min-height: 118px;
+  resize: vertical;
+  padding: 12px;
+  line-height: 1.45;
 }
 
 .note-form textarea {

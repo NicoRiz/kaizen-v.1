@@ -75,6 +75,7 @@ export default function Home({
           notes={notes}
           onAddSuggestedStep={(step) =>
             setSuggestedTask({
+              description: step.description || "",
               title: step.title || step.description,
               type: "growth",
             })

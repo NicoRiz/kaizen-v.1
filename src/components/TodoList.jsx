@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { getTaskTypeLabel } from "../constants/tasks.js";
 import { completionKey } from "../utils/date.js";
 
@@ -9,9 +10,18 @@ export default function TodoList({
   onToggleTask,
   tasks,
 }) {
+  const [expandedDescriptionTaskId, setExpandedDescriptionTaskId] =
+    useState(null);
   const completedTasks = tasks.filter((task) =>
     Boolean(completions[completionKey(date, task.id)]),
   ).length;
+
+  function toggleDescription(event, taskId) {
+    event.stopPropagation();
+    setExpandedDescriptionTaskId((currentTaskId) =>
+      currentTaskId === taskId ? null : taskId,
+    );
+  }
 
   return (
     <section className="panel">
@@ -36,6 +46,10 @@ export default function TodoList({
           {tasks.map((task) => {
             const isCompleted = Boolean(completions[completionKey(date, task.id)]);
             const postponeCount = Number(task.postponeCount) || 0;
+            const description = (task.description || "").trim();
+            const isDescriptionExpanded =
+              expandedDescriptionTaskId === task.id;
+            const canToggleDescription = description.length > 120;
 
             return (
               <li
@@ -53,6 +67,30 @@ export default function TodoList({
 
                 <div className="task-content">
                   <strong>{task.title}</strong>
+                  {description && (
+                    <button
+                      aria-expanded={isDescriptionExpanded}
+                      aria-label={
+                        isDescriptionExpanded
+                          ? `Riduci descrizione di ${task.title}`
+                          : `Espandi descrizione di ${task.title}`
+                      }
+                      className={`task-description ${
+                        isDescriptionExpanded ? "is-expanded" : ""
+                      }`}
+                      onClick={(event) => toggleDescription(event, task.id)}
+                      type="button"
+                    >
+                      <span>{description}</span>
+                      {canToggleDescription && (
+                        <small>
+                          {isDescriptionExpanded
+                            ? "Mostra meno"
+                            : "Mostra altro"}
+                        </small>
+                      )}
+                    </button>
+                  )}
                   <div className="task-meta">
                     <small className={`task-type task-type--${task.type}`}>
                       {getTaskTypeLabel(task.type)}

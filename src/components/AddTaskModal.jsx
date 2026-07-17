@@ -10,6 +10,9 @@ export default function AddTaskModal({
   requireDateChoice = false,
 }) {
   const [title, setTitle] = useState(initialTask?.title || "");
+  const [description, setDescription] = useState(
+    initialTask?.description || "",
+  );
   const [taskDate, setTaskDate] = useState(
     requireDateChoice ? "" : initialTask?.date || date,
   );
@@ -33,6 +36,7 @@ export default function AddTaskModal({
 
     onSubmit({
       date: taskDate,
+      description: description.trim(),
       repeatDays,
       title: title.trim(),
       type,
@@ -93,6 +97,15 @@ export default function AddTaskModal({
                 </option>
               ))}
             </select>
+          </label>
+
+          <label>
+            Descrizione
+            <textarea
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="Aggiungi dettagli, contesto o note operative"
+              value={description}
+            />
           </label>
 
           <fieldset>
