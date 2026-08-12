@@ -439,6 +439,12 @@ export default function App() {
     });
   }
 
+  function deleteCalendarItem(itemId) {
+    setCalendarItems((currentItems) =>
+      currentItems.filter((item) => item.id !== itemId),
+    );
+  }
+
   function updateProject(projectInput) {
     setProjects((currentProjects) =>
       currentProjects.map((project) =>
@@ -601,7 +607,6 @@ export default function App() {
       <GtdPage
         activeSection={activeSection}
         archiveItems={archiveItems}
-        onCreateProject={createProject}
         onDeleteArchiveItem={deleteArchiveItem}
         onDeleteProject={deleteProject}
         onDeleteSomedayMaybe={deleteSomedayMaybe}
@@ -665,6 +670,7 @@ export default function App() {
       onClarifyInboxItem={clarifyInboxItem}
       onNavigate={navigate}
       onSaveCalendarItem={saveCalendarItem}
+      onDeleteCalendarItem={deleteCalendarItem}
       onToggleNextAction={toggleNextAction}
       projects={projects}
     />

@@ -320,7 +320,6 @@ function ProjectModal({
 }
 
 function ProjectsTab({
-  onCreateProject,
   onDeleteProject,
   onSaveProjectActions,
   onUpdateProject,
@@ -329,7 +328,6 @@ function ProjectsTab({
 }) {
   const [expandedProjectIds, setExpandedProjectIds] = useState([]);
   const [editingProject, setEditingProject] = useState(null);
-  const [newProjectTitle, setNewProjectTitle] = useState("");
 
   function toggleProject(projectId) {
     setExpandedProjectIds((currentIds) =>
@@ -339,35 +337,8 @@ function ProjectsTab({
     );
   }
 
-  function handleCreateProject(event) {
-    event.preventDefault();
-    const project = onCreateProject(newProjectTitle);
-
-    if (project) {
-      setNewProjectTitle("");
-      setExpandedProjectIds((currentIds) => [...currentIds, project.id]);
-    }
-  }
-
   return (
     <section className="gtd-tab-panel">
-      <form className="inline-create-form" onSubmit={handleCreateProject}>
-        <input
-          aria-label="Nuovo progetto"
-          onChange={(event) => setNewProjectTitle(event.target.value)}
-          placeholder="Nuovo progetto"
-          type="text"
-          value={newProjectTitle}
-        />
-        <button
-          className="add-button icon-add-button"
-          disabled={!newProjectTitle.trim()}
-          type="submit"
-        >
-          <span aria-hidden="true">+</span>
-        </button>
-      </form>
-
       {projects.length === 0 ? (
         <p className="empty-state">Nessun progetto.</p>
       ) : (
@@ -475,7 +446,6 @@ function EditableList({
   searchable = false,
 }) {
   const [editingItem, setEditingItem] = useState(null);
-  const [isCreating, setIsCreating] = useState(false);
   const [search, setSearch] = useState("");
   const visibleItems = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
@@ -501,14 +471,6 @@ function EditableList({
             value={search}
           />
         )}
-        <button
-          className="add-button"
-          onClick={() => setIsCreating(true)}
-          type="button"
-        >
-          <span aria-hidden="true">+</span>
-          Nuovo
-        </button>
       </div>
 
       {visibleItems.length === 0 ? (
@@ -539,19 +501,17 @@ function EditableList({
         </ul>
       )}
 
-      {(editingItem || isCreating) && (
+      {editingItem && (
         <BasicItemModal
           bodyLabel={bodyLabel}
           item={editingItem}
-          mode={editingItem ? modalTitle : `Nuovo - ${modalTitle}`}
+          mode={modalTitle}
           onClose={() => {
             setEditingItem(null);
-            setIsCreating(false);
           }}
           onSubmit={(itemInput) => {
             onSave(itemInput);
             setEditingItem(null);
-            setIsCreating(false);
           }}
         />
       )}
@@ -562,7 +522,6 @@ function EditableList({
 export default function GtdPage({
   activeSection,
   archiveItems,
-  onCreateProject,
   onDeleteArchiveItem,
   onDeleteProject,
   onDeleteSomedayMaybe,
@@ -608,7 +567,6 @@ export default function GtdPage({
 
           {activeTab === "projects" && (
             <ProjectsTab
-              onCreateProject={onCreateProject}
               onDeleteProject={onDeleteProject}
               onSaveProjectActions={onSaveProjectActions}
               onUpdateProject={onUpdateProject}

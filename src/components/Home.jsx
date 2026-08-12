@@ -20,6 +20,7 @@ export default function Home({
   nextActions,
   onAddInboxItem,
   onClarifyInboxItem,
+  onDeleteCalendarItem,
   onNavigate,
   onSaveCalendarItem,
   onToggleNextAction,
@@ -27,6 +28,7 @@ export default function Home({
 }) {
   const [captureText, setCaptureText] = useState("");
   const [clarifyingItem, setClarifyingItem] = useState(null);
+  const [showCompletedActions, setShowCompletedActions] = useState(false);
   const openInboxItems = useMemo(
     () => inboxItems.filter((item) => item.status === "open"),
     [inboxItems],
@@ -36,6 +38,17 @@ export default function Home({
       nextActions
         .filter((action) => !action.completed)
         .sort((left, right) => (left.order || 0) - (right.order || 0)),
+    [nextActions],
+  );
+  const completedNextActions = useMemo(
+    () =>
+      nextActions
+        .filter((action) => action.completed)
+        .sort(
+          (left, right) =>
+            new Date(right.completedAt || right.createdAt) -
+            new Date(left.completedAt || left.createdAt),
+        ),
     [nextActions],
   );
 
@@ -57,6 +70,7 @@ export default function Home({
 
         <CalendarPanel
           items={calendarItems}
+          onDeleteItem={onDeleteCalendarItem}
           onSaveItem={onSaveCalendarItem}
           today={date}
         />
@@ -73,7 +87,8 @@ export default function Home({
             <input
               aria-label="Aggiungi cose alla Inbox"
               onChange={(event) => setCaptureText(event.target.value)}
-              placeholder="Scrivi e premi Invio"
+              placeholder="Aggiungi qualcosa alla Inbox..."
+              enterKeyHint="send"
               type="text"
               value={captureText}
             />
@@ -83,7 +98,7 @@ export default function Home({
               disabled={!captureText.trim()}
               type="submit"
             >
-              <span aria-hidden="true">+</span>
+              <span aria-hidden="true">&gt;</span>
             </button>
           </form>
         </section>
@@ -146,6 +161,54 @@ export default function Home({
               ))}
             </ul>
           )}
+
+          <div className="completed-actions">
+            <button
+              aria-expanded={showCompletedActions}
+              className="completed-toggle"
+              onClick={() => setShowCompletedActions((isOpen) => !isOpen)}
+              type="button"
+            >
+              <span>Completate ({completedNextActions.length})</span>
+              <span aria-hidden="true">{showCompletedActions ? "^" : "v"}</span>
+            </button>
+
+            {showCompletedActions && (
+              completedNextActions.length === 0 ? (
+                <p className="empty-state compact-empty">
+                  Nessuna azione completata.
+                </p>
+              ) : (
+                <ul className="task-list completed-action-list">
+                  {completedNextActions.map((action) => (
+                    <li className="task-item is-completed" key={action.id}>
+                      <label className="task-check">
+                        <input
+                          checked={action.completed}
+                          onChange={() => onToggleNextAction(action.id)}
+                          type="checkbox"
+                        />
+                        <span />
+                      </label>
+                      <div className="task-content">
+                        <strong>{action.title}</strong>
+                        {action.completedAt && (
+                          <small className="completed-date">
+                            Completata il{" "}
+                            {new Intl.DateTimeFormat("it-IT", {
+                              day: "2-digit",
+                              month: "short",
+                              year: "numeric",
+                            }).format(new Date(action.completedAt))}
+                          </small>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )
+            )}
+          </div>
         </section>
       </main>
 

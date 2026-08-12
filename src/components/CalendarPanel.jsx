@@ -4,9 +4,24 @@ import { addDays, dateKey, parseDateKey } from "../utils/date.js";
 function formatDayLabel(value) {
   return new Intl.DateTimeFormat("it-IT", {
     weekday: "short",
-    day: "2-digit",
-    month: "short",
+    day: "numeric",
   }).format(parseDateKey(value));
+}
+
+function formatWeekTitle(days) {
+  const firstDay = parseDateKey(days[0]);
+  const lastDay = parseDateKey(days[days.length - 1]);
+  const sameMonth = firstDay.getMonth() === lastDay.getMonth();
+  const firstLabel = new Intl.DateTimeFormat("it-IT", {
+    day: "numeric",
+    month: sameMonth ? undefined : "short",
+  }).format(firstDay);
+  const lastLabel = new Intl.DateTimeFormat("it-IT", {
+    day: "numeric",
+    month: "short",
+  }).format(lastDay);
+
+  return `${firstLabel} - ${lastLabel}`;
 }
 
 function formatMonthTitle(value) {
@@ -54,12 +69,13 @@ function sortItems(items) {
   });
 }
 
-function EventModal({ item, onClose, onSubmit, today }) {
+function EventModal({ item, onClose, onDelete, onSubmit, today }) {
   const [title, setTitle] = useState(item?.title || "");
   const [description, setDescription] = useState(item?.description || "");
   const [date, setDate] = useState(item?.date || today);
   const [startTime, setStartTime] = useState(item?.startTime || "");
   const [endTime, setEndTime] = useState(item?.endTime || "");
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -76,6 +92,19 @@ function EventModal({ item, onClose, onSubmit, today }) {
       startTime,
       endTime,
     });
+  }
+
+  function handleDelete() {
+    if (!item) {
+      return;
+    }
+
+    if (!isConfirmingDelete) {
+      setIsConfirmingDelete(true);
+      return;
+    }
+
+    onDelete(item.id);
   }
 
   return (
@@ -99,6 +128,18 @@ function EventModal({ item, onClose, onSubmit, today }) {
             x
           </button>
         </div>
+
+        {item && (
+          <button
+            className={`secondary-button danger-button event-delete-button ${
+              isConfirmingDelete ? "is-confirming" : ""
+            }`}
+            onClick={handleDelete}
+            type="button"
+          >
+            {isConfirmingDelete ? "Conferma elimina" : "Elimina evento"}
+          </button>
+        )}
 
         <form className="task-form" onSubmit={handleSubmit}>
           <label>
@@ -162,7 +203,7 @@ function EventModal({ item, onClose, onSubmit, today }) {
   );
 }
 
-export default function CalendarPanel({ items, onSaveItem, today }) {
+export default function CalendarPanel({ items, onDeleteItem, onSaveItem, today }) {
   const [view, setView] = useState("week");
   const [cursorDate, setCursorDate] = useState(today);
   const [editingItem, setEditingItem] = useState(null);
@@ -176,6 +217,7 @@ export default function CalendarPanel({ items, onSaveItem, today }) {
     return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   }, [cursorDate, view]);
   const sortedItems = useMemo(() => sortItems(items), [items]);
+  const periodTitle = view === "week" ? formatWeekTitle(days) : formatMonthTitle(cursorDate);
 
   function moveCursor(direction) {
     setCursorDate((currentDate) =>
@@ -185,11 +227,58 @@ export default function CalendarPanel({ items, onSaveItem, today }) {
 
   return (
     <section className="panel calendar-panel">
-      <div className="section-heading calendar-heading">
+      <div className="calendar-heading">
         <div>
           <p className="eyebrow">Calendario Kaizen</p>
-          <h2>{view === "week" ? "Settimana" : formatMonthTitle(cursorDate)}</h2>
+          <h2>{view === "week" ? "Settimana" : "Mese"}</h2>
         </div>
+        <div className="segmented-control calendar-view-toggle" aria-label="Vista calendario">
+          <button
+            className={view === "week" ? "is-selected" : ""}
+            onClick={() => setView("week")}
+            type="button"
+          >
+            Settimana
+          </button>
+          <button
+            className={view === "month" ? "is-selected" : ""}
+            onClick={() => setView("month")}
+            type="button"
+          >
+            Mese
+          </button>
+        </div>
+      </div>
+
+      <div className="calendar-control-row">
+        <button
+          aria-label="Periodo precedente"
+          className="ghost-button calendar-nav-button"
+          onClick={() => moveCursor(-1)}
+          type="button"
+        >
+          {"<"}
+        </button>
+        <strong>{periodTitle}</strong>
+        <button
+          aria-label="Periodo successivo"
+          className="ghost-button calendar-nav-button"
+          onClick={() => moveCursor(1)}
+          type="button"
+        >
+          {">"}
+        </button>
+        <button
+          aria-label="Nuovo evento"
+          className="add-button icon-add-button calendar-add-button"
+          onClick={() => setIsCreatingItem(true)}
+          type="button"
+        >
+          <span aria-hidden="true">+</span>
+        </button>
+      </div>
+
+      <div className="calendar-desktop-actions">
         <div className="calendar-actions">
           <div className="segmented-control" aria-label="Vista calendario">
             <button
@@ -237,11 +326,13 @@ export default function CalendarPanel({ items, onSaveItem, today }) {
       <div className={`calendar-grid calendar-grid--${view}`}>
         {days.map((day) => {
           const dayItems = sortedItems.filter((item) => item.date === day);
+          const isToday = day === today;
 
           return (
-            <article className="calendar-day" key={day}>
+            <article className={`calendar-day ${isToday ? "is-today" : ""}`} key={day}>
               <div className="calendar-day-heading">
                 <strong>{formatDayLabel(day)}</strong>
+                {isToday && <span>Oggi</span>}
               </div>
 
               {dayItems.length === 0 ? (
@@ -270,6 +361,11 @@ export default function CalendarPanel({ items, onSaveItem, today }) {
         <EventModal
           item={editingItem}
           onClose={() => {
+            setEditingItem(null);
+            setIsCreatingItem(false);
+          }}
+          onDelete={(itemId) => {
+            onDeleteItem(itemId);
             setEditingItem(null);
             setIsCreatingItem(false);
           }}
