@@ -1,23 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import GtdPage from "./components/GtdPage.jsx";
 import Home from "./components/Home.jsx";
+import NotesHub from "./components/NotesHub.jsx";
 import NotesSection from "./components/NotesSection.jsx";
-import {
-  addDays,
-  completionKey,
-  dateKey,
-  getTasksForDate,
-  isBeforeDate,
-} from "./utils/date.js";
+import { dateKey } from "./utils/date.js";
 import { readStorage, writeStorage } from "./utils/storage.js";
-import {
-  getPreviousJournalEntries,
-  JOURNAL_ANALYSES_STORAGE_KEY,
-  normalizeJournalAnalysis,
-} from "./lib/journal.js";
+import { JOURNAL_ANALYSES_STORAGE_KEY } from "./lib/journal.js";
 
 const STORAGE_KEYS = {
-  tasks: "kaizen:v1:tasks",
-  completions: "kaizen:v1:taskCompletions",
+  legacyTasks: "kaizen:v1:tasks",
+  legacyCompletions: "kaizen:v1:taskCompletions",
   notes: "kaizen:v1:dailyNotes",
   journalAnalyses: JOURNAL_ANALYSES_STORAGE_KEY,
   streak: "kaizen:v1:currentStreak",
@@ -25,9 +17,24 @@ const STORAGE_KEYS = {
   lastCheckedDate: "kaizen:v1:lastCheckedDate",
   creditedDates: "kaizen:v1:creditedDates",
   sectionNotes: "kaizen:v1:sectionNotes",
+  inboxItems: "kaizen:v1:gtd:inboxItems",
+  projects: "kaizen:v1:gtd:projects",
+  projectActions: "kaizen:v1:gtd:projectActions",
+  nextActions: "kaizen:v1:gtd:nextActions",
+  calendarItems: "kaizen:v1:gtd:calendarItems",
+  waitingFor: "kaizen:v1:gtd:waitingFor",
+  somedayMaybe: "kaizen:v1:gtd:somedayMaybe",
+  archiveItems: "kaizen:v1:gtd:archiveItems",
+  migration: "kaizen:v1:gtd:migration",
 };
 
-const SECTIONS = {
+const PRIMARY_SECTIONS = {
+  gtd: "gtd",
+  home: "home",
+  note: "note",
+};
+
+const NOTE_SECTIONS = {
   knowledge: {
     key: "knowledge",
     title: "Knowledge",
@@ -39,10 +46,6 @@ const SECTIONS = {
     title: "Skills",
     eyebrow: "Crescita",
     emptyMessage: "Nessuna nota salvata in Skills.",
-  },
-  home: {
-    key: "home",
-    title: "Home",
   },
   sharkmo: {
     key: "sharkmo",
@@ -66,355 +69,130 @@ function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function reconcileStreak({
-  tasks,
-  completions,
-  currentStreak,
-  bestStreak,
-  lastCheckedDate,
-  creditedDates,
-}) {
-  const today = dateKey();
-  let nextCurrent = Number(currentStreak) || 0;
-  let nextBest = Number(bestStreak) || 0;
-  let nextLastChecked = lastCheckedDate || today;
-  const nextCreditedDates = { ...creditedDates };
+function nowIso() {
+  return new Date().toISOString();
+}
 
-  if (isBeforeDate(nextLastChecked, today)) {
-    let cursor = nextLastChecked;
-
-    while (isBeforeDate(cursor, today)) {
-      const tasksForDay = getTasksForDate(tasks, cursor);
-
-      if (tasksForDay.length > 0) {
-        const allCompleted = tasksForDay.every(
-          (task) => completions[completionKey(cursor, task.id)],
-        );
-
-        if (allCompleted) {
-          if (!nextCreditedDates[cursor]) {
-            nextCurrent += 1;
-            nextBest = Math.max(nextBest, nextCurrent);
-            nextCreditedDates[cursor] = true;
-          }
-        } else if (!nextCreditedDates[cursor]) {
-          nextCurrent = 0;
-        }
-      }
-
-      cursor = addDays(cursor, 1);
-    }
-
-    nextLastChecked = today;
-  }
-
-  const todayTasks = getTasksForDate(tasks, today);
-  const todayIsComplete =
-    todayTasks.length > 0 &&
-    todayTasks.every((task) => completions[completionKey(today, task.id)]);
-
-  if (todayIsComplete && !nextCreditedDates[today]) {
-    nextCurrent += 1;
-    nextBest = Math.max(nextBest, nextCurrent);
-    nextCreditedDates[today] = true;
-  }
-
-  if (!todayIsComplete && nextCreditedDates[today]) {
-    nextCurrent = Math.max(0, nextCurrent - 1);
-    delete nextCreditedDates[today];
-  }
-
+function normalizeLegacyTask(task, index) {
   return {
-    currentStreak: nextCurrent,
-    bestStreak: nextBest,
-    lastCheckedDate: nextLastChecked,
-    creditedDates: nextCreditedDates,
+    id: createId(),
+    title: task.title,
+    completed: false,
+    order: index,
+    createdAt: task.createdAt || nowIso(),
+    completedAt: null,
+    source: "legacy-task",
+    legacyTaskId: task.id,
   };
 }
 
 export default function App() {
-  const [tasks, setTasks] = useState(() => readStorage(STORAGE_KEYS.tasks, []));
-  const [completions, setCompletions] = useState(() =>
-    readStorage(STORAGE_KEYS.completions, {}),
+  const [legacyTasks] = useState(() =>
+    readStorage(STORAGE_KEYS.legacyTasks, []),
   );
-  const [notes, setNotes] = useState(() => readStorage(STORAGE_KEYS.notes, {}));
-  const [journalAnalyses, setJournalAnalyses] = useState(() =>
-    readStorage(STORAGE_KEYS.journalAnalyses, {}),
-  );
-  const [currentStreak, setCurrentStreak] = useState(() =>
-    readStorage(STORAGE_KEYS.streak, 0),
-  );
-  const [bestStreak, setBestStreak] = useState(() =>
-    readStorage(STORAGE_KEYS.bestStreak, 0),
-  );
-  const [lastCheckedDate, setLastCheckedDate] = useState(() =>
-    readStorage(STORAGE_KEYS.lastCheckedDate, dateKey()),
-  );
-  const [creditedDates, setCreditedDates] = useState(() =>
-    readStorage(STORAGE_KEYS.creditedDates, {}),
-  );
-  const [activeSection, setActiveSection] = useState(SECTIONS.home.key);
+  const [activeSection, setActiveSection] = useState(PRIMARY_SECTIONS.home);
+  const [activeNoteSection, setActiveNoteSection] = useState(null);
   const [sectionNotes, setSectionNotes] = useState(() =>
     readStorage(STORAGE_KEYS.sectionNotes, []),
   );
-  const [isAnalyzingJournal, setIsAnalyzingJournal] = useState(false);
-  const [journalAnalysisError, setJournalAnalysisError] = useState("");
+  const [inboxItems, setInboxItems] = useState(() =>
+    readStorage(STORAGE_KEYS.inboxItems, []),
+  );
+  const [projects, setProjects] = useState(() =>
+    readStorage(STORAGE_KEYS.projects, []),
+  );
+  const [projectActions, setProjectActions] = useState(() =>
+    readStorage(STORAGE_KEYS.projectActions, []),
+  );
+  const [nextActions, setNextActions] = useState(() =>
+    readStorage(STORAGE_KEYS.nextActions, []),
+  );
+  const [calendarItems, setCalendarItems] = useState(() =>
+    readStorage(STORAGE_KEYS.calendarItems, []),
+  );
+  const [waitingFor, setWaitingFor] = useState(() =>
+    readStorage(STORAGE_KEYS.waitingFor, []),
+  );
+  const [somedayMaybe, setSomedayMaybe] = useState(() =>
+    readStorage(STORAGE_KEYS.somedayMaybe, []),
+  );
+  const [archiveItems, setArchiveItems] = useState(() =>
+    readStorage(STORAGE_KEYS.archiveItems, []),
+  );
+  const [migration, setMigration] = useState(() =>
+    readStorage(STORAGE_KEYS.migration, {}),
+  );
 
   const today = useMemo(() => dateKey(), []);
-  const todaysTasks = useMemo(
-    () => getTasksForDate(tasks, today),
-    [tasks, today],
-  );
 
-  useEffect(() => writeStorage(STORAGE_KEYS.tasks, tasks), [tasks]);
+  useEffect(() => writeStorage(STORAGE_KEYS.sectionNotes, sectionNotes), [sectionNotes]);
+  useEffect(() => writeStorage(STORAGE_KEYS.inboxItems, inboxItems), [inboxItems]);
+  useEffect(() => writeStorage(STORAGE_KEYS.projects, projects), [projects]);
   useEffect(
-    () => writeStorage(STORAGE_KEYS.completions, completions),
-    [completions],
+    () => writeStorage(STORAGE_KEYS.projectActions, projectActions),
+    [projectActions],
   );
-  useEffect(() => writeStorage(STORAGE_KEYS.notes, notes), [notes]);
+  useEffect(() => writeStorage(STORAGE_KEYS.nextActions, nextActions), [nextActions]);
   useEffect(
-    () => writeStorage(STORAGE_KEYS.journalAnalyses, journalAnalyses),
-    [journalAnalyses],
+    () => writeStorage(STORAGE_KEYS.calendarItems, calendarItems),
+    [calendarItems],
   );
+  useEffect(() => writeStorage(STORAGE_KEYS.waitingFor, waitingFor), [waitingFor]);
   useEffect(
-    () => writeStorage(STORAGE_KEYS.streak, currentStreak),
-    [currentStreak],
+    () => writeStorage(STORAGE_KEYS.somedayMaybe, somedayMaybe),
+    [somedayMaybe],
   );
-  useEffect(
-    () => writeStorage(STORAGE_KEYS.bestStreak, bestStreak),
-    [bestStreak],
-  );
-  useEffect(
-    () => writeStorage(STORAGE_KEYS.lastCheckedDate, lastCheckedDate),
-    [lastCheckedDate],
-  );
-  useEffect(
-    () => writeStorage(STORAGE_KEYS.creditedDates, creditedDates),
-    [creditedDates],
-  );
-  useEffect(
-    () => writeStorage(STORAGE_KEYS.sectionNotes, sectionNotes),
-    [sectionNotes],
-  );
+  useEffect(() => writeStorage(STORAGE_KEYS.archiveItems, archiveItems), [archiveItems]);
+  useEffect(() => writeStorage(STORAGE_KEYS.migration, migration), [migration]);
 
   useEffect(() => {
-    const next = reconcileStreak({
-      tasks,
-      completions,
-      currentStreak,
-      bestStreak,
-      lastCheckedDate,
-      creditedDates,
-    });
-
-    if (next.currentStreak !== currentStreak) {
-      setCurrentStreak(next.currentStreak);
-    }
-
-    if (next.bestStreak !== bestStreak) {
-      setBestStreak(next.bestStreak);
-    }
-
-    if (next.lastCheckedDate !== lastCheckedDate) {
-      setLastCheckedDate(next.lastCheckedDate);
-    }
-
-    if (JSON.stringify(next.creditedDates) !== JSON.stringify(creditedDates)) {
-      setCreditedDates(next.creditedDates);
-    }
-  }, [
-    tasks,
-    completions,
-    currentStreak,
-    bestStreak,
-    lastCheckedDate,
-    creditedDates,
-  ]);
-
-  function addTask(task) {
-    setTasks((currentTasks) => [
-      ...currentTasks,
-      {
-        ...task,
-        id: crypto.randomUUID(),
-        postponeCount: 0,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-  }
-
-  function toggleTask(taskId) {
-    const key = completionKey(today, taskId);
-
-    setCompletions((currentCompletions) => ({
-      ...currentCompletions,
-      [key]: !currentCompletions[key],
-    }));
-  }
-
-  function deleteTask(taskId) {
-    setTasks((currentTasks) =>
-      currentTasks.filter((task) => task.id !== taskId),
-    );
-    setCompletions((currentCompletions) =>
-      Object.fromEntries(
-        Object.entries(currentCompletions).filter(
-          ([key]) => !key.endsWith(`:${taskId}`),
-        ),
-      ),
-    );
-  }
-
-  function postponeTask(taskId) {
-    const tomorrow = addDays(today, 1);
-
-    setTasks((currentTasks) =>
-      currentTasks.map((task) => {
-        if (task.id !== taskId) {
-          return task;
-        }
-
-        const repeatDays = task.repeatDays || [];
-        const postponeCount = (Number(task.postponeCount) || 0) + 1;
-
-        if (repeatDays.length === 0) {
-          return {
-            ...task,
-            date: tomorrow,
-            postponeCount,
-          };
-        }
-
-        const carryoverDates = Array.isArray(task.carryoverDates)
-          ? task.carryoverDates
-          : [];
-        const nextCarryoverDates = carryoverDates.filter(
-          (carryoverDate) => carryoverDate !== today,
-        );
-
-        if (!nextCarryoverDates.includes(tomorrow)) {
-          nextCarryoverDates.push(tomorrow);
-        }
-
-        return {
-          ...task,
-          postponeCount,
-          postponedDates: {
-            ...(task.postponedDates || {}),
-            [today]: true,
-          },
-          carryoverDates: nextCarryoverDates,
-        };
-      }),
-    );
-
-    setCompletions((currentCompletions) => {
-      const nextCompletions = { ...currentCompletions };
-      delete nextCompletions[completionKey(today, taskId)];
-      return nextCompletions;
-    });
-  }
-
-  function updateTodayNote(value) {
-    updateJournalNote(today, value);
-  }
-
-  function updateJournalNote(targetDate, value) {
-    setNotes((currentNotes) => ({
-      ...currentNotes,
-      [targetDate]: value,
-    }));
-  }
-
-  function buildJournalAnalysisPayload() {
-    const skillsNotes = sectionNotes
-      .filter((note) => note.section === SECTIONS.skills.key)
-      .map((note) => ({
-        title: note.title,
-        content: note.content,
-        updatedAt: note.updatedAt,
-      }));
-    const taskSnapshots = todaysTasks.map((task) => {
-      const completed = Boolean(completions[completionKey(today, task.id)]);
-
-      return {
-        title: task.title,
-        type: task.type,
-        postponeCount: Number(task.postponeCount) || 0,
-        completed,
-      };
-    });
-
-    return {
-      date: today,
-      journal: notes[today] || "",
-      tasks: {
-        planned: taskSnapshots,
-        completed: taskSnapshots.filter((task) => task.completed),
-        uncompleted: taskSnapshots.filter((task) => !task.completed),
-        postponementCount: taskSnapshots.reduce(
-          (total, task) => total + task.postponeCount,
-          0,
-        ),
-      },
-      previousJournals: getPreviousJournalEntries(notes, today, 7),
-      skillsNotes,
-    };
-  }
-
-  async function analyzeTodayJournal() {
-    if (isAnalyzingJournal || !(notes[today] || "").trim()) {
+    if (migration.legacyTasksToNextActions || legacyTasks.length === 0) {
       return;
     }
 
-    setIsAnalyzingJournal(true);
-    setJournalAnalysisError("");
-
-    try {
-      const response = await fetch("/api/analyze-journal", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(buildJournalAnalysisPayload()),
-      });
-      const body = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(
-          body.error || "Non sono riuscito ad analizzare il journal.",
-        );
-      }
-
-      const normalized = normalizeJournalAnalysis(body.analysis);
-
-      if (!normalized) {
-        throw new Error("La risposta di Kaizen Analyst non è valida.");
-      }
-
-      const now = new Date().toISOString();
-
-      setJournalAnalyses((currentAnalyses) => ({
-        ...currentAnalyses,
-        [today]: {
-          ...normalized,
-          createdAt: currentAnalyses[today]?.createdAt || now,
-          updatedAt: now,
-        },
-      }));
-    } catch (error) {
-      setJournalAnalysisError(
-        error instanceof Error
-          ? error.message
-          : "Non sono riuscito ad analizzare il journal.",
+    setNextActions((currentActions) => {
+      const migratedLegacyIds = new Set(
+        currentActions
+          .filter((action) => action.source === "legacy-task")
+          .map((action) => action.legacyTaskId),
       );
-    } finally {
-      setIsAnalyzingJournal(false);
+      const activeLegacyTasks = legacyTasks.filter(
+        (task) => task.title && !migratedLegacyIds.has(task.id),
+      );
+
+      if (activeLegacyTasks.length === 0) {
+        return currentActions;
+      }
+
+      const highestOrder = currentActions.reduce(
+        (maxOrder, action) => Math.max(maxOrder, Number(action.order) || 0),
+        -1,
+      );
+
+      return [
+        ...currentActions,
+        ...activeLegacyTasks.map((task, index) =>
+          normalizeLegacyTask(task, highestOrder + index + 1),
+        ),
+      ];
+    });
+
+    setMigration((currentMigration) => ({
+      ...currentMigration,
+      legacyTasksToNextActions: nowIso(),
+      legacyTaskCount: legacyTasks.length,
+    }));
+  }, [legacyTasks, migration.legacyTasksToNextActions]);
+
+  function navigate(section) {
+    setActiveSection(section);
+    if (section !== PRIMARY_SECTIONS.note) {
+      setActiveNoteSection(null);
     }
   }
 
   function saveSectionNote(section, noteInput) {
-    const now = new Date().toISOString();
+    const timestamp = nowIso();
     const cleanTitle = noteInput.title.trim();
     const cleanContent = noteInput.content.trim();
 
@@ -430,7 +208,7 @@ export default function App() {
                 ...note,
                 title: cleanTitle,
                 content: cleanContent,
-                updatedAt: now,
+                updatedAt: timestamp,
               }
             : note,
         );
@@ -442,8 +220,8 @@ export default function App() {
           section,
           title: cleanTitle,
           content: cleanContent,
-          createdAt: now,
-          updatedAt: now,
+          createdAt: timestamp,
+          updatedAt: timestamp,
         },
         ...currentNotes,
       ];
@@ -456,49 +234,439 @@ export default function App() {
     );
   }
 
-  const activeSectionConfig = SECTIONS[activeSection];
-  const activeSectionNotes = sectionNotes.filter(
-    (note) => note.section === activeSection,
-  );
+  function addInboxItem(originalText) {
+    const cleanText = originalText.trim();
 
-  if (activeSection === SECTIONS.home.key) {
+    if (!cleanText) {
+      return;
+    }
+
+    setInboxItems((currentItems) => [
+      {
+        id: createId(),
+        originalText: cleanText,
+        clarifiedText: "",
+        createdAt: nowIso(),
+        status: "open",
+      },
+      ...currentItems,
+    ]);
+  }
+
+  function createProject(title) {
+    const cleanTitle = title.trim();
+
+    if (!cleanTitle) {
+      return null;
+    }
+
+    const project = {
+      id: createId(),
+      title: cleanTitle,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    setProjects((currentProjects) => [...currentProjects, project]);
+    return project;
+  }
+
+  function clarifyInboxItem(itemId, result) {
+    const timestamp = nowIso();
+    const clarifiedText = result.clarifiedText.trim();
+
+    if (result.actionable) {
+      const nextActionTitle = result.nextActionTitle.trim();
+
+      if (result.destination === "projects") {
+        const projectId = result.projectId || createProject(result.newProjectTitle)?.id;
+
+        if (!projectId || !nextActionTitle) {
+          return;
+        }
+
+        setProjectActions((currentActions) => [
+          ...currentActions,
+          {
+            id: createId(),
+            projectId,
+            title: nextActionTitle,
+            completed: false,
+            order: currentActions.filter((action) => action.projectId === projectId)
+              .length,
+            createdAt: timestamp,
+            completedAt: null,
+            sourceInboxItemId: itemId,
+          },
+        ]);
+      }
+
+      if (result.destination === "next-actions" && nextActionTitle) {
+        setNextActions((currentActions) => [
+          ...currentActions,
+          {
+            id: createId(),
+            title: nextActionTitle,
+            completed: false,
+            order: currentActions.length,
+            createdAt: timestamp,
+            completedAt: null,
+            sourceInboxItemId: itemId,
+            clarifiedText,
+          },
+        ]);
+      }
+
+      if (result.destination === "agenda") {
+        setCalendarItems((currentItems) => [
+          ...currentItems,
+          {
+            id: createId(),
+            title: nextActionTitle || clarifiedText,
+            description: clarifiedText,
+            date: result.date,
+            allDay: !result.startTime,
+            startTime: result.startTime || null,
+            endTime: result.endTime || null,
+            createdAt: timestamp,
+            sourceInboxItemId: itemId,
+          },
+        ]);
+      }
+
+      if (result.destination === "waiting-for") {
+        setWaitingFor((currentItems) => [
+          {
+            id: createId(),
+            title: nextActionTitle || clarifiedText,
+            description: result.description.trim() || clarifiedText,
+            createdAt: timestamp,
+            sourceInboxItemId: itemId,
+          },
+          ...currentItems,
+        ]);
+      }
+    } else {
+      if (result.nonActionableDestination === "someday") {
+        setSomedayMaybe((currentItems) => [
+          {
+            id: createId(),
+            title: clarifiedText,
+            description: result.description.trim(),
+            createdAt: timestamp,
+            sourceInboxItemId: itemId,
+          },
+          ...currentItems,
+        ]);
+      }
+
+      if (result.nonActionableDestination === "archive") {
+        setArchiveItems((currentItems) => [
+          {
+            id: createId(),
+            title: clarifiedText,
+            content: result.description.trim() || clarifiedText,
+            createdAt: timestamp,
+            archivedAt: timestamp,
+            sourceInboxItemId: itemId,
+          },
+          ...currentItems,
+        ]);
+      }
+    }
+
+    setInboxItems((currentItems) =>
+      currentItems.filter((item) => item.id !== itemId),
+    );
+  }
+
+  function toggleNextAction(actionId) {
+    setNextActions((currentActions) =>
+      currentActions.map((action) => {
+        if (action.id !== actionId) {
+          return action;
+        }
+
+        const completed = !action.completed;
+
+        return {
+          ...action,
+          completed,
+          completedAt: completed ? nowIso() : null,
+        };
+      }),
+    );
+  }
+
+  function saveCalendarItem(itemInput) {
+    const timestamp = nowIso();
+    const cleanTitle = itemInput.title.trim();
+
+    if (!cleanTitle || !itemInput.date) {
+      return;
+    }
+
+    setCalendarItems((currentItems) => {
+      if (itemInput.id) {
+        return currentItems.map((item) =>
+          item.id === itemInput.id
+            ? {
+                ...item,
+                title: cleanTitle,
+                description: itemInput.description.trim(),
+                date: itemInput.date,
+                allDay: !itemInput.startTime,
+                startTime: itemInput.startTime || null,
+                endTime: itemInput.endTime || null,
+              }
+            : item,
+        );
+      }
+
+      return [
+        ...currentItems,
+        {
+          id: createId(),
+          title: cleanTitle,
+          description: itemInput.description.trim(),
+          date: itemInput.date,
+          allDay: !itemInput.startTime,
+          startTime: itemInput.startTime || null,
+          endTime: itemInput.endTime || null,
+          createdAt: timestamp,
+        },
+      ];
+    });
+  }
+
+  function updateProject(projectInput) {
+    setProjects((currentProjects) =>
+      currentProjects.map((project) =>
+        project.id === projectInput.id
+          ? {
+              ...project,
+              title: projectInput.title.trim(),
+              updatedAt: nowIso(),
+            }
+          : project,
+      ),
+    );
+  }
+
+  function deleteProject(projectId) {
+    setProjects((currentProjects) =>
+      currentProjects.filter((project) => project.id !== projectId),
+    );
+    setProjectActions((currentActions) =>
+      currentActions.filter((action) => action.projectId !== projectId),
+    );
+  }
+
+  function saveProjectActions(projectId, actions) {
+    setProjectActions((currentActions) => [
+      ...currentActions.filter((action) => action.projectId !== projectId),
+      ...actions.map((action, index) => ({
+        ...action,
+        id: action.id || createId(),
+        projectId,
+        title: action.title.trim(),
+        completed: Boolean(action.completed),
+        order: index,
+        createdAt: action.createdAt || nowIso(),
+        completedAt: action.completed ? action.completedAt || nowIso() : null,
+      })),
+    ]);
+  }
+
+  function saveWaitingFor(itemInput) {
+    const timestamp = nowIso();
+    const cleanTitle = itemInput.title.trim();
+
+    if (!cleanTitle) {
+      return;
+    }
+
+    setWaitingFor((currentItems) => {
+      if (itemInput.id) {
+        return currentItems.map((item) =>
+          item.id === itemInput.id
+            ? {
+                ...item,
+                title: cleanTitle,
+                description: itemInput.description.trim(),
+              }
+            : item,
+        );
+      }
+
+      return [
+        {
+          id: createId(),
+          title: cleanTitle,
+          description: itemInput.description.trim(),
+          createdAt: timestamp,
+        },
+        ...currentItems,
+      ];
+    });
+  }
+
+  function deleteWaitingFor(itemId) {
+    setWaitingFor((currentItems) =>
+      currentItems.filter((item) => item.id !== itemId),
+    );
+  }
+
+  function saveSomedayMaybe(itemInput) {
+    const timestamp = nowIso();
+    const cleanTitle = itemInput.title.trim();
+
+    if (!cleanTitle) {
+      return;
+    }
+
+    setSomedayMaybe((currentItems) => {
+      if (itemInput.id) {
+        return currentItems.map((item) =>
+          item.id === itemInput.id
+            ? {
+                ...item,
+                title: cleanTitle,
+                description: itemInput.description.trim(),
+              }
+            : item,
+        );
+      }
+
+      return [
+        {
+          id: createId(),
+          title: cleanTitle,
+          description: itemInput.description.trim(),
+          createdAt: timestamp,
+        },
+        ...currentItems,
+      ];
+    });
+  }
+
+  function deleteSomedayMaybe(itemId) {
+    setSomedayMaybe((currentItems) =>
+      currentItems.filter((item) => item.id !== itemId),
+    );
+  }
+
+  function saveArchiveItem(itemInput) {
+    const timestamp = nowIso();
+    const cleanTitle = itemInput.title.trim();
+
+    if (!cleanTitle) {
+      return;
+    }
+
+    setArchiveItems((currentItems) => {
+      if (itemInput.id) {
+        return currentItems.map((item) =>
+          item.id === itemInput.id
+            ? {
+                ...item,
+                title: cleanTitle,
+                content: itemInput.content.trim(),
+              }
+            : item,
+        );
+      }
+
+      return [
+        {
+          id: createId(),
+          title: cleanTitle,
+          content: itemInput.content.trim(),
+          createdAt: timestamp,
+          archivedAt: timestamp,
+        },
+        ...currentItems,
+      ];
+    });
+  }
+
+  function deleteArchiveItem(itemId) {
+    setArchiveItems((currentItems) =>
+      currentItems.filter((item) => item.id !== itemId),
+    );
+  }
+
+  if (activeSection === PRIMARY_SECTIONS.gtd) {
     return (
-      <Home
+      <GtdPage
         activeSection={activeSection}
-        bestStreak={bestStreak}
-        completions={completions}
-        currentStreak={currentStreak}
-        date={today}
-        journalAnalyses={journalAnalyses}
-        journalAnalysis={journalAnalyses[today]}
-        journalAnalysisError={journalAnalysisError}
-        note={notes[today] || ""}
-        onAddTask={addTask}
-        onAnalyzeJournal={analyzeTodayJournal}
-        onDeleteTask={deleteTask}
-        onNavigate={setActiveSection}
-        onNoteChange={updateTodayNote}
-        onPostponeTask={postponeTask}
-        onSaveJournal={updateJournalNote}
-        onToggleTask={toggleTask}
-        isAnalyzingJournal={isAnalyzingJournal}
-        notes={notes}
-        tasks={todaysTasks}
+        archiveItems={archiveItems}
+        onCreateProject={createProject}
+        onDeleteArchiveItem={deleteArchiveItem}
+        onDeleteProject={deleteProject}
+        onDeleteSomedayMaybe={deleteSomedayMaybe}
+        onDeleteWaitingFor={deleteWaitingFor}
+        onNavigate={navigate}
+        onSaveArchiveItem={saveArchiveItem}
+        onSaveProjectActions={saveProjectActions}
+        onSaveSomedayMaybe={saveSomedayMaybe}
+        onSaveWaitingFor={saveWaitingFor}
+        onUpdateProject={updateProject}
+        projectActions={projectActions}
+        projects={projects}
+        somedayMaybe={somedayMaybe}
+        waitingFor={waitingFor}
+      />
+    );
+  }
+
+  if (activeSection === PRIMARY_SECTIONS.note && activeNoteSection) {
+    const activeSectionConfig = NOTE_SECTIONS[activeNoteSection];
+    const activeSectionNotes = sectionNotes.filter(
+      (note) => note.section === activeNoteSection,
+    );
+
+    return (
+      <NotesSection
+        activeSection={activeSection}
+        emptyMessage={activeSectionConfig.emptyMessage}
+        eyebrow={activeSectionConfig.eyebrow}
+        notes={activeSectionNotes}
+        onBack={() => setActiveNoteSection(null)}
+        onDeleteNote={deleteSectionNote}
+        onNavigate={navigate}
+        onSaveNote={(note) => saveSectionNote(activeNoteSection, note)}
+        section={activeNoteSection}
+        title={activeSectionConfig.title}
+      />
+    );
+  }
+
+  if (activeSection === PRIMARY_SECTIONS.note) {
+    return (
+      <NotesHub
+        activeSection={activeSection}
+        noteSections={NOTE_SECTIONS}
+        notes={sectionNotes}
+        onNavigate={navigate}
+        onOpenSection={setActiveNoteSection}
       />
     );
   }
 
   return (
-    <NotesSection
+    <Home
       activeSection={activeSection}
-      emptyMessage={activeSectionConfig.emptyMessage}
-      eyebrow={activeSectionConfig.eyebrow}
-      notes={activeSectionNotes}
-      onDeleteNote={deleteSectionNote}
-      onNavigate={setActiveSection}
-      onSaveNote={(note) => saveSectionNote(activeSection, note)}
-      section={activeSection}
-      title={activeSectionConfig.title}
+      calendarItems={calendarItems}
+      date={today}
+      inboxItems={inboxItems}
+      nextActions={nextActions}
+      onAddInboxItem={addInboxItem}
+      onClarifyInboxItem={clarifyInboxItem}
+      onNavigate={navigate}
+      onSaveCalendarItem={saveCalendarItem}
+      onToggleNextAction={toggleNextAction}
+      projects={projects}
     />
   );
 }

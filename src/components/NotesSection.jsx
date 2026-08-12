@@ -8,6 +8,7 @@ export default function NotesSection({
   emptyMessage,
   eyebrow,
   notes,
+  onBack,
   onDeleteNote,
   onNavigate,
   onSaveNote,
@@ -49,13 +50,12 @@ export default function NotesSection({
             <h1>{title}</h1>
           </div>
           <button
-            aria-label={`Aggiungi nota ${title}`}
+            aria-label="Torna alle Note"
             className="add-button"
-            onClick={openNewNote}
+            onClick={onBack}
             type="button"
           >
-            <span aria-hidden="true">+</span>
-            Nuova nota
+            Indietro
           </button>
         </header>
 
@@ -65,7 +65,15 @@ export default function NotesSection({
               <p className="eyebrow">Note salvate</p>
               <h2>{title}</h2>
             </div>
-            <span className="counter">{sortedNotes.length}</span>
+            <button
+              aria-label={`Aggiungi nota ${title}`}
+              className="add-button"
+              onClick={openNewNote}
+              type="button"
+            >
+              <span aria-hidden="true">+</span>
+              Nuova nota
+            </button>
           </div>
 
           {sortedNotes.length === 0 ? (

@@ -1,23 +1,15 @@
 const NAV_ITEMS = [
   {
-    key: "knowledge",
-    label: "Knowledge",
-  },
-  {
-    key: "skills",
-    label: "Skills",
+    key: "gtd",
+    label: "GTD",
   },
   {
     key: "home",
     label: "Home",
   },
   {
-    key: "sharkmo",
-    label: "Sharkmo",
-  },
-  {
-    key: "oneiros",
-    label: "Oneiros",
+    key: "note",
+    label: "Note",
   },
 ];
 
