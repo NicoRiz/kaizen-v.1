@@ -53,9 +53,120 @@ textarea:focus-visible {
   padding: 14px 10px calc(96px + env(safe-area-inset-bottom));
 }
 
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 18px 10px;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 18px;
+  width: min(100%, 430px);
+  border: 1px solid rgba(52, 33, 37, 0.08);
+  border-radius: 18px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 16px 40px rgba(55, 35, 32, 0.08);
+}
+
+.auth-panel h1 {
+  font-size: clamp(2.5rem, 18vw, 4.2rem);
+}
+
+.auth-toggle {
+  width: 100%;
+}
+
 .home {
   width: min(100%, 760px);
   margin: 0 auto;
+}
+
+.sync-status {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top));
+  right: 10px;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(52vw, 220px);
+  min-height: 34px;
+  border: 1px solid rgba(52, 33, 37, 0.1);
+  border-radius: 999px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #5d504d;
+  font-size: 0.72rem;
+  font-weight: 850;
+  box-shadow: 0 10px 24px rgba(55, 35, 32, 0.1);
+  backdrop-filter: blur(12px);
+}
+
+.sync-status span {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #4a7f62;
+}
+
+.sync-status--syncing span,
+.sync-status--checking span {
+  background: #b8872a;
+}
+
+.sync-status--offline span,
+.sync-status--localOnly span {
+  background: #8c7d78;
+}
+
+.sync-status--error span {
+  background: #8f2e29;
+}
+
+.sync-modal .modal-actions {
+  position: static;
+  margin: 0;
+  padding-top: 0;
+  background: transparent;
+}
+
+.sync-detail-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.sync-detail-list p {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #ece3dc;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fffdfa;
+}
+
+.sync-detail-list strong {
+  color: #2c2122;
+  font-size: 0.82rem;
+}
+
+.sync-detail-list span {
+  color: #6f6260;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .topbar {

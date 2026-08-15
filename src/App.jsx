@@ -1,32 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
+import AuthScreen from "./components/AuthScreen.jsx";
 import GtdPage from "./components/GtdPage.jsx";
 import Home from "./components/Home.jsx";
 import NotesHub from "./components/NotesHub.jsx";
 import NotesSection from "./components/NotesSection.jsx";
+import SyncStatus from "./components/SyncStatus.jsx";
+import { useKaizenSync } from "./hooks/useKaizenSync.js";
+import { COLLECTIONS, STORAGE_KEYS } from "./lib/kaizenData.js";
+import {
+  createId,
+  normalizeLegacyData,
+  nowIso,
+  readLegacyData,
+} from "./lib/syncCore.js";
 import { dateKey } from "./utils/date.js";
 import { readStorage, writeStorage } from "./utils/storage.js";
-import { JOURNAL_ANALYSES_STORAGE_KEY } from "./lib/journal.js";
-
-const STORAGE_KEYS = {
-  legacyTasks: "kaizen:v1:tasks",
-  legacyCompletions: "kaizen:v1:taskCompletions",
-  notes: "kaizen:v1:dailyNotes",
-  journalAnalyses: JOURNAL_ANALYSES_STORAGE_KEY,
-  streak: "kaizen:v1:currentStreak",
-  bestStreak: "kaizen:v1:bestStreak",
-  lastCheckedDate: "kaizen:v1:lastCheckedDate",
-  creditedDates: "kaizen:v1:creditedDates",
-  sectionNotes: "kaizen:v1:sectionNotes",
-  inboxItems: "kaizen:v1:gtd:inboxItems",
-  projects: "kaizen:v1:gtd:projects",
-  projectActions: "kaizen:v1:gtd:projectActions",
-  nextActions: "kaizen:v1:gtd:nextActions",
-  calendarItems: "kaizen:v1:gtd:calendarItems",
-  waitingFor: "kaizen:v1:gtd:waitingFor",
-  somedayMaybe: "kaizen:v1:gtd:somedayMaybe",
-  archiveItems: "kaizen:v1:gtd:archiveItems",
-  migration: "kaizen:v1:gtd:migration",
-};
 
 const PRIMARY_SECTIONS = {
   gtd: "gtd",
@@ -61,88 +49,58 @@ const NOTE_SECTIONS = {
   },
 };
 
-function createId() {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
 function normalizeLegacyTask(task, index) {
+  const timestamp = nowIso();
+
   return {
     id: createId(),
     title: task.title,
     completed: false,
     order: index,
-    createdAt: task.createdAt || nowIso(),
+    createdAt: task.createdAt || timestamp,
+    updatedAt: timestamp,
     completedAt: null,
     source: "legacy-task",
     legacyTaskId: task.id,
   };
 }
 
+function initialKaizenData() {
+  return normalizeLegacyData(readLegacyData()).data;
+}
+
 export default function App() {
-  const [legacyTasks] = useState(() =>
-    readStorage(STORAGE_KEYS.legacyTasks, []),
-  );
-  const [activeSection, setActiveSection] = useState(PRIMARY_SECTIONS.home);
-  const [activeNoteSection, setActiveNoteSection] = useState(null);
-  const [sectionNotes, setSectionNotes] = useState(() =>
-    readStorage(STORAGE_KEYS.sectionNotes, []),
-  );
-  const [inboxItems, setInboxItems] = useState(() =>
-    readStorage(STORAGE_KEYS.inboxItems, []),
-  );
-  const [projects, setProjects] = useState(() =>
-    readStorage(STORAGE_KEYS.projects, []),
-  );
-  const [projectActions, setProjectActions] = useState(() =>
-    readStorage(STORAGE_KEYS.projectActions, []),
-  );
-  const [nextActions, setNextActions] = useState(() =>
-    readStorage(STORAGE_KEYS.nextActions, []),
-  );
-  const [calendarItems, setCalendarItems] = useState(() =>
-    readStorage(STORAGE_KEYS.calendarItems, []),
-  );
-  const [waitingFor, setWaitingFor] = useState(() =>
-    readStorage(STORAGE_KEYS.waitingFor, []),
-  );
-  const [somedayMaybe, setSomedayMaybe] = useState(() =>
-    readStorage(STORAGE_KEYS.somedayMaybe, []),
-  );
-  const [archiveItems, setArchiveItems] = useState(() =>
-    readStorage(STORAGE_KEYS.archiveItems, []),
-  );
+  const [kaizenData, setKaizenData] = useState(initialKaizenData);
   const [migration, setMigration] = useState(() =>
     readStorage(STORAGE_KEYS.migration, {}),
   );
+  const [activeSection, setActiveSection] = useState(PRIMARY_SECTIONS.home);
+  const [activeNoteSection, setActiveNoteSection] = useState(null);
+  const sync = useKaizenSync({
+    data: kaizenData,
+    onReplaceData: setKaizenData,
+  });
 
   const today = useMemo(() => dateKey(), []);
+  const {
+    archiveItems,
+    calendarItems,
+    inboxItems,
+    legacyTasks,
+    nextActions,
+    projectActions,
+    projects,
+    sectionNotes,
+    somedayMaybe,
+    waitingFor,
+  } = kaizenData;
 
-  useEffect(() => writeStorage(STORAGE_KEYS.sectionNotes, sectionNotes), [sectionNotes]);
-  useEffect(() => writeStorage(STORAGE_KEYS.inboxItems, inboxItems), [inboxItems]);
-  useEffect(() => writeStorage(STORAGE_KEYS.projects, projects), [projects]);
-  useEffect(
-    () => writeStorage(STORAGE_KEYS.projectActions, projectActions),
-    [projectActions],
-  );
-  useEffect(() => writeStorage(STORAGE_KEYS.nextActions, nextActions), [nextActions]);
-  useEffect(
-    () => writeStorage(STORAGE_KEYS.calendarItems, calendarItems),
-    [calendarItems],
-  );
-  useEffect(() => writeStorage(STORAGE_KEYS.waitingFor, waitingFor), [waitingFor]);
-  useEffect(
-    () => writeStorage(STORAGE_KEYS.somedayMaybe, somedayMaybe),
-    [somedayMaybe],
-  );
-  useEffect(() => writeStorage(STORAGE_KEYS.archiveItems, archiveItems), [archiveItems]);
+  useEffect(() => {
+    for (const collection of COLLECTIONS) {
+      sync.trackCollectionChange(collection.name, kaizenData[collection.name]);
+    }
+  }, [kaizenData, sync.trackCollectionChange]);
+
   useEffect(() => writeStorage(STORAGE_KEYS.migration, migration), [migration]);
 
   useEffect(() => {
@@ -150,7 +108,7 @@ export default function App() {
       return;
     }
 
-    setNextActions((currentActions) => {
+    updateCollection("nextActions", (currentActions) => {
       const migratedLegacyIds = new Set(
         currentActions
           .filter((action) => action.source === "legacy-task")
@@ -184,6 +142,23 @@ export default function App() {
     }));
   }, [legacyTasks, migration.legacyTasksToNextActions]);
 
+  function updateCollection(collectionName, updater) {
+    setKaizenData((currentData) => {
+      const currentValue = currentData[collectionName];
+      const nextValue =
+        typeof updater === "function" ? updater(currentValue, currentData) : updater;
+
+      if (Object.is(currentValue, nextValue)) {
+        return currentData;
+      }
+
+      return {
+        ...currentData,
+        [collectionName]: nextValue,
+      };
+    });
+  }
+
   function navigate(section) {
     setActiveSection(section);
     if (section !== PRIMARY_SECTIONS.note) {
@@ -200,7 +175,7 @@ export default function App() {
       return;
     }
 
-    setSectionNotes((currentNotes) => {
+    updateCollection("sectionNotes", (currentNotes) => {
       if (noteInput.id) {
         return currentNotes.map((note) =>
           note.id === noteInput.id
@@ -229,7 +204,7 @@ export default function App() {
   }
 
   function deleteSectionNote(noteId) {
-    setSectionNotes((currentNotes) =>
+    updateCollection("sectionNotes", (currentNotes) =>
       currentNotes.filter((note) => note.id !== noteId),
     );
   }
@@ -241,12 +216,15 @@ export default function App() {
       return;
     }
 
-    setInboxItems((currentItems) => [
+    const timestamp = nowIso();
+
+    updateCollection("inboxItems", (currentItems) => [
       {
         id: createId(),
         originalText: cleanText,
         clarifiedText: "",
-        createdAt: nowIso(),
+        createdAt: timestamp,
+        updatedAt: timestamp,
         status: "open",
       },
       ...currentItems,
@@ -260,14 +238,15 @@ export default function App() {
       return null;
     }
 
+    const timestamp = nowIso();
     const project = {
       id: createId(),
       title: cleanTitle,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
 
-    setProjects((currentProjects) => [...currentProjects, project]);
+    updateCollection("projects", (currentProjects) => [...currentProjects, project]);
     return project;
   }
 
@@ -285,7 +264,7 @@ export default function App() {
           return;
         }
 
-        setProjectActions((currentActions) => [
+        updateCollection("projectActions", (currentActions) => [
           ...currentActions,
           {
             id: createId(),
@@ -295,6 +274,7 @@ export default function App() {
             order: currentActions.filter((action) => action.projectId === projectId)
               .length,
             createdAt: timestamp,
+            updatedAt: timestamp,
             completedAt: null,
             sourceInboxItemId: itemId,
           },
@@ -302,7 +282,7 @@ export default function App() {
       }
 
       if (result.destination === "next-actions" && nextActionTitle) {
-        setNextActions((currentActions) => [
+        updateCollection("nextActions", (currentActions) => [
           ...currentActions,
           {
             id: createId(),
@@ -310,6 +290,7 @@ export default function App() {
             completed: false,
             order: currentActions.length,
             createdAt: timestamp,
+            updatedAt: timestamp,
             completedAt: null,
             sourceInboxItemId: itemId,
             clarifiedText,
@@ -318,7 +299,7 @@ export default function App() {
       }
 
       if (result.destination === "agenda") {
-        setCalendarItems((currentItems) => [
+        updateCollection("calendarItems", (currentItems) => [
           ...currentItems,
           {
             id: createId(),
@@ -329,18 +310,20 @@ export default function App() {
             startTime: result.startTime || null,
             endTime: result.endTime || null,
             createdAt: timestamp,
+            updatedAt: timestamp,
             sourceInboxItemId: itemId,
           },
         ]);
       }
 
       if (result.destination === "waiting-for") {
-        setWaitingFor((currentItems) => [
+        updateCollection("waitingFor", (currentItems) => [
           {
             id: createId(),
             title: nextActionTitle || clarifiedText,
             description: result.description.trim() || clarifiedText,
             createdAt: timestamp,
+            updatedAt: timestamp,
             sourceInboxItemId: itemId,
           },
           ...currentItems,
@@ -348,12 +331,13 @@ export default function App() {
       }
     } else {
       if (result.nonActionableDestination === "someday") {
-        setSomedayMaybe((currentItems) => [
+        updateCollection("somedayMaybe", (currentItems) => [
           {
             id: createId(),
             title: clarifiedText,
             description: result.description.trim(),
             createdAt: timestamp,
+            updatedAt: timestamp,
             sourceInboxItemId: itemId,
           },
           ...currentItems,
@@ -361,12 +345,13 @@ export default function App() {
       }
 
       if (result.nonActionableDestination === "archive") {
-        setArchiveItems((currentItems) => [
+        updateCollection("archiveItems", (currentItems) => [
           {
             id: createId(),
             title: clarifiedText,
             content: result.description.trim() || clarifiedText,
             createdAt: timestamp,
+            updatedAt: timestamp,
             archivedAt: timestamp,
             sourceInboxItemId: itemId,
           },
@@ -375,13 +360,15 @@ export default function App() {
       }
     }
 
-    setInboxItems((currentItems) =>
+    updateCollection("inboxItems", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
   }
 
   function toggleNextAction(actionId) {
-    setNextActions((currentActions) =>
+    const timestamp = nowIso();
+
+    updateCollection("nextActions", (currentActions) =>
       currentActions.map((action) => {
         if (action.id !== actionId) {
           return action;
@@ -392,7 +379,8 @@ export default function App() {
         return {
           ...action,
           completed,
-          completedAt: completed ? nowIso() : null,
+          completedAt: completed ? timestamp : null,
+          updatedAt: timestamp,
         };
       }),
     );
@@ -406,7 +394,7 @@ export default function App() {
       return;
     }
 
-    setCalendarItems((currentItems) => {
+    updateCollection("calendarItems", (currentItems) => {
       if (itemInput.id) {
         return currentItems.map((item) =>
           item.id === itemInput.id
@@ -418,6 +406,7 @@ export default function App() {
                 allDay: !itemInput.startTime,
                 startTime: itemInput.startTime || null,
                 endTime: itemInput.endTime || null,
+                updatedAt: timestamp,
               }
             : item,
         );
@@ -434,25 +423,28 @@ export default function App() {
           startTime: itemInput.startTime || null,
           endTime: itemInput.endTime || null,
           createdAt: timestamp,
+          updatedAt: timestamp,
         },
       ];
     });
   }
 
   function deleteCalendarItem(itemId) {
-    setCalendarItems((currentItems) =>
+    updateCollection("calendarItems", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
   }
 
   function updateProject(projectInput) {
-    setProjects((currentProjects) =>
+    const timestamp = nowIso();
+
+    updateCollection("projects", (currentProjects) =>
       currentProjects.map((project) =>
         project.id === projectInput.id
           ? {
               ...project,
               title: projectInput.title.trim(),
-              updatedAt: nowIso(),
+              updatedAt: timestamp,
             }
           : project,
       ),
@@ -460,16 +452,18 @@ export default function App() {
   }
 
   function deleteProject(projectId) {
-    setProjects((currentProjects) =>
+    updateCollection("projects", (currentProjects) =>
       currentProjects.filter((project) => project.id !== projectId),
     );
-    setProjectActions((currentActions) =>
+    updateCollection("projectActions", (currentActions) =>
       currentActions.filter((action) => action.projectId !== projectId),
     );
   }
 
   function saveProjectActions(projectId, actions) {
-    setProjectActions((currentActions) => [
+    const timestamp = nowIso();
+
+    updateCollection("projectActions", (currentActions) => [
       ...currentActions.filter((action) => action.projectId !== projectId),
       ...actions.map((action, index) => ({
         ...action,
@@ -478,8 +472,9 @@ export default function App() {
         title: action.title.trim(),
         completed: Boolean(action.completed),
         order: index,
-        createdAt: action.createdAt || nowIso(),
-        completedAt: action.completed ? action.completedAt || nowIso() : null,
+        createdAt: action.createdAt || timestamp,
+        updatedAt: timestamp,
+        completedAt: action.completed ? action.completedAt || timestamp : null,
       })),
     ]);
   }
@@ -492,7 +487,7 @@ export default function App() {
       return;
     }
 
-    setWaitingFor((currentItems) => {
+    updateCollection("waitingFor", (currentItems) => {
       if (itemInput.id) {
         return currentItems.map((item) =>
           item.id === itemInput.id
@@ -500,6 +495,7 @@ export default function App() {
                 ...item,
                 title: cleanTitle,
                 description: itemInput.description.trim(),
+                updatedAt: timestamp,
               }
             : item,
         );
@@ -511,6 +507,7 @@ export default function App() {
           title: cleanTitle,
           description: itemInput.description.trim(),
           createdAt: timestamp,
+          updatedAt: timestamp,
         },
         ...currentItems,
       ];
@@ -518,7 +515,7 @@ export default function App() {
   }
 
   function deleteWaitingFor(itemId) {
-    setWaitingFor((currentItems) =>
+    updateCollection("waitingFor", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
   }
@@ -531,7 +528,7 @@ export default function App() {
       return;
     }
 
-    setSomedayMaybe((currentItems) => {
+    updateCollection("somedayMaybe", (currentItems) => {
       if (itemInput.id) {
         return currentItems.map((item) =>
           item.id === itemInput.id
@@ -539,6 +536,7 @@ export default function App() {
                 ...item,
                 title: cleanTitle,
                 description: itemInput.description.trim(),
+                updatedAt: timestamp,
               }
             : item,
         );
@@ -550,6 +548,7 @@ export default function App() {
           title: cleanTitle,
           description: itemInput.description.trim(),
           createdAt: timestamp,
+          updatedAt: timestamp,
         },
         ...currentItems,
       ];
@@ -557,7 +556,7 @@ export default function App() {
   }
 
   function deleteSomedayMaybe(itemId) {
-    setSomedayMaybe((currentItems) =>
+    updateCollection("somedayMaybe", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
   }
@@ -570,7 +569,7 @@ export default function App() {
       return;
     }
 
-    setArchiveItems((currentItems) => {
+    updateCollection("archiveItems", (currentItems) => {
       if (itemInput.id) {
         return currentItems.map((item) =>
           item.id === itemInput.id
@@ -578,6 +577,7 @@ export default function App() {
                 ...item,
                 title: cleanTitle,
                 content: itemInput.content.trim(),
+                updatedAt: timestamp,
               }
             : item,
         );
@@ -589,6 +589,7 @@ export default function App() {
           title: cleanTitle,
           content: itemInput.content.trim(),
           createdAt: timestamp,
+          updatedAt: timestamp,
           archivedAt: timestamp,
         },
         ...currentItems,
@@ -597,31 +598,56 @@ export default function App() {
   }
 
   function deleteArchiveItem(itemId) {
-    setArchiveItems((currentItems) =>
+    updateCollection("archiveItems", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
+    );
+  }
+
+  if (!sync.authReady) {
+    return (
+      <div className="auth-shell">
+        <main className="auth-panel">
+          <p className="eyebrow">Kaizen Sync</p>
+          <h1>KAIZEN</h1>
+          <p className="empty-state">Recupero sessione...</p>
+        </main>
+      </div>
+    );
+  }
+
+  if (!sync.isAuthenticated && sync.config.isConfigured) {
+    return (
+      <AuthScreen
+        error={sync.authError}
+        isConfigured={sync.config.isConfigured}
+        onSubmit={sync.signIn}
+      />
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.gtd) {
     return (
-      <GtdPage
-        activeSection={activeSection}
-        archiveItems={archiveItems}
-        onDeleteArchiveItem={deleteArchiveItem}
-        onDeleteProject={deleteProject}
-        onDeleteSomedayMaybe={deleteSomedayMaybe}
-        onDeleteWaitingFor={deleteWaitingFor}
-        onNavigate={navigate}
-        onSaveArchiveItem={saveArchiveItem}
-        onSaveProjectActions={saveProjectActions}
-        onSaveSomedayMaybe={saveSomedayMaybe}
-        onSaveWaitingFor={saveWaitingFor}
-        onUpdateProject={updateProject}
-        projectActions={projectActions}
-        projects={projects}
-        somedayMaybe={somedayMaybe}
-        waitingFor={waitingFor}
-      />
+      <>
+        <SyncStatus sync={sync} />
+        <GtdPage
+          activeSection={activeSection}
+          archiveItems={archiveItems}
+          onDeleteArchiveItem={deleteArchiveItem}
+          onDeleteProject={deleteProject}
+          onDeleteSomedayMaybe={deleteSomedayMaybe}
+          onDeleteWaitingFor={deleteWaitingFor}
+          onNavigate={navigate}
+          onSaveArchiveItem={saveArchiveItem}
+          onSaveProjectActions={saveProjectActions}
+          onSaveSomedayMaybe={saveSomedayMaybe}
+          onSaveWaitingFor={saveWaitingFor}
+          onUpdateProject={updateProject}
+          projectActions={projectActions}
+          projects={projects}
+          somedayMaybe={somedayMaybe}
+          waitingFor={waitingFor}
+        />
+      </>
     );
   }
 
@@ -632,47 +658,56 @@ export default function App() {
     );
 
     return (
-      <NotesSection
-        activeSection={activeSection}
-        emptyMessage={activeSectionConfig.emptyMessage}
-        eyebrow={activeSectionConfig.eyebrow}
-        notes={activeSectionNotes}
-        onBack={() => setActiveNoteSection(null)}
-        onDeleteNote={deleteSectionNote}
-        onNavigate={navigate}
-        onSaveNote={(note) => saveSectionNote(activeNoteSection, note)}
-        section={activeNoteSection}
-        title={activeSectionConfig.title}
-      />
+      <>
+        <SyncStatus sync={sync} />
+        <NotesSection
+          activeSection={activeSection}
+          emptyMessage={activeSectionConfig.emptyMessage}
+          eyebrow={activeSectionConfig.eyebrow}
+          notes={activeSectionNotes}
+          onBack={() => setActiveNoteSection(null)}
+          onDeleteNote={deleteSectionNote}
+          onNavigate={navigate}
+          onSaveNote={(note) => saveSectionNote(activeNoteSection, note)}
+          section={activeNoteSection}
+          title={activeSectionConfig.title}
+        />
+      </>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.note) {
     return (
-      <NotesHub
-        activeSection={activeSection}
-        noteSections={NOTE_SECTIONS}
-        notes={sectionNotes}
-        onNavigate={navigate}
-        onOpenSection={setActiveNoteSection}
-      />
+      <>
+        <SyncStatus sync={sync} />
+        <NotesHub
+          activeSection={activeSection}
+          noteSections={NOTE_SECTIONS}
+          notes={sectionNotes}
+          onNavigate={navigate}
+          onOpenSection={setActiveNoteSection}
+        />
+      </>
     );
   }
 
   return (
-    <Home
-      activeSection={activeSection}
-      calendarItems={calendarItems}
-      date={today}
-      inboxItems={inboxItems}
-      nextActions={nextActions}
-      onAddInboxItem={addInboxItem}
-      onClarifyInboxItem={clarifyInboxItem}
-      onNavigate={navigate}
-      onSaveCalendarItem={saveCalendarItem}
-      onDeleteCalendarItem={deleteCalendarItem}
-      onToggleNextAction={toggleNextAction}
-      projects={projects}
-    />
+    <>
+      <SyncStatus sync={sync} />
+      <Home
+        activeSection={activeSection}
+        calendarItems={calendarItems}
+        date={today}
+        inboxItems={inboxItems}
+        nextActions={nextActions}
+        onAddInboxItem={addInboxItem}
+        onClarifyInboxItem={clarifyInboxItem}
+        onNavigate={navigate}
+        onSaveCalendarItem={saveCalendarItem}
+        onDeleteCalendarItem={deleteCalendarItem}
+        onToggleNextAction={toggleNextAction}
+        projects={projects}
+      />
+    </>
   );
 }
