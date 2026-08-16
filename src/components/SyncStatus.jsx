@@ -13,8 +13,20 @@ const STATUS_LABELS = {
 export default function SyncStatus({ sync }) {
   const [isOpen, setIsOpen] = useState(false);
   const [importMessage, setImportMessage] = useState("");
+  const [isImportingLocal, setIsImportingLocal] = useState(false);
   const fileInputRef = useRef(null);
   const label = STATUS_LABELS[sync.status] || "Sync";
+  const localRecordCount =
+    sync.diagnostics?.localCount ?? sync.diagnostics?.legacyCount ?? 0;
+  const remoteRecordCount = sync.diagnostics?.remoteCount ?? "n/d";
+  const deviceMigration = sync.diagnostics?.deviceMigration;
+  const deviceMigrationLabel = deviceMigration?.deviceMigrationCompletedAt
+    ? "Completata"
+    : deviceMigration?.deviceMigrationStartedAt
+      ? "In corso"
+      : "In attesa";
+  const canImportLocal =
+    sync.isAuthenticated && localRecordCount > 0 && typeof sync.importLocalDataIntoAccount === "function";
 
   async function handleImport(event) {
     const file = event.target.files?.[0];
@@ -33,6 +45,23 @@ export default function SyncStatus({ sync }) {
       setImportMessage("Backup non importato: file non valido.");
     } finally {
       event.target.value = "";
+    }
+  }
+
+  async function handleLocalImport() {
+    setIsImportingLocal(true);
+    setImportMessage("");
+
+    try {
+      const result = await sync.importLocalDataIntoAccount();
+      setImportMessage(
+        `Import locale: importati ${result.importedCount}, gia' presenti ${result.alreadyPresentCount}, conflitti conservati ${result.conflictCount}, totale account ${result.totalCount}. Queue: ${result.queuedCount}.`,
+      );
+    } catch (error) {
+      console.error("Kaizen local import error", error);
+      setImportMessage("Import locale non completato. I dati locali e gli snapshot restano salvati.");
+    } finally {
+      setIsImportingLocal(false);
     }
   }
 
@@ -86,9 +115,9 @@ export default function SyncStatus({ sync }) {
               <p>
                 <strong>Migrazione</strong>
                 <span>
-                  {sync.migrationInfo?.migrationCompletedAt
-                    ? `v${sync.migrationInfo.migrationVersion} completata`
-                    : "In attesa"}
+                  {deviceMigration?.deviceMigrationCompletedAt
+                    ? `Device completato ${deviceMigration.deviceMigrationCompletedAt}`
+                    : "Device in attesa"}
                 </span>
               </p>
             </div>
@@ -97,34 +126,61 @@ export default function SyncStatus({ sync }) {
               <p className="eyebrow">Diagnostica</p>
               <dl>
                 <div>
-                  <dt>Record legacy trovati</dt>
-                  <dd>{sync.diagnostics?.legacyCount ?? 0}</dd>
+                  <dt>Device ID</dt>
+                  <dd>{sync.diagnostics?.deviceId || "n/d"}</dd>
                 </div>
                 <div>
-                  <dt>Record cache</dt>
-                  <dd>{sync.diagnostics?.cacheCount ?? 0}</dd>
+                  <dt>Record locali</dt>
+                  <dd>{localRecordCount}</dd>
                 </div>
                 <div>
                   <dt>Record remoti</dt>
-                  <dd>{sync.diagnostics?.remoteCount ?? "n/d"}</dd>
+                  <dd>{remoteRecordCount}</dd>
                 </div>
                 <div>
-                  <dt>Queue pendente</dt>
+                  <dt>Queue</dt>
                   <dd>{sync.diagnostics?.queueCount ?? sync.pendingCount ?? 0}</dd>
                 </div>
                 <div>
-                  <dt>Fonte recovery</dt>
-                  <dd>{sync.diagnostics?.source || "n/d"}</dd>
+                  <dt>Ultimo snapshot</dt>
+                  <dd>{sync.diagnostics?.snapshotKey ? "presente" : "assente"}</dd>
                 </div>
                 <div>
-                  <dt>Ultimo backup legacy</dt>
-                  <dd>{sync.diagnostics?.backupKey ? "presente" : "assente"}</dd>
+                  <dt>Migrazione dispositivo</dt>
+                  <dd>{deviceMigrationLabel}</dd>
+                </div>
+                <div>
+                  <dt>Ultimo sync</dt>
+                  <dd>{sync.lastSuccessfulSyncAt || "n/d"}</dd>
+                </div>
+                <div>
+                  <dt>Fonte UI corrente</dt>
+                  <dd>{sync.diagnostics?.source || "n/d"}</dd>
                 </div>
               </dl>
             </div>
 
             {sync.message && <p className="form-error">{sync.message}</p>}
             {importMessage && <p className="empty-state">{importMessage}</p>}
+
+            {canImportLocal && (
+              <div className="sync-import-box">
+                <p>
+                  <strong>Dati locali trovati: {localRecordCount}</strong>
+                  <span>Record remoti: {remoteRecordCount}</span>
+                </p>
+                <button
+                  className="submit-button"
+                  disabled={isImportingLocal}
+                  onClick={handleLocalImport}
+                  type="button"
+                >
+                  {isImportingLocal
+                    ? "Importazione..."
+                    : "Importa dati locali in questo account"}
+                </button>
+              </div>
+            )}
 
             <div className="modal-actions">
               <button

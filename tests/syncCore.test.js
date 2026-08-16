@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyChangedRecords,
+  countRecords,
+  createDeviceSnapshot,
   dataFromRecords,
   diffCollectionRecords,
   getBestLocalRecoveryData,
+  getOrCreateDeviceId,
   mergeBootstrapRecords,
   mergeRecords,
   normalizeLegacyData,
+  queueFromRecords,
+  readDeviceSnapshots,
   recordsFromData,
   validateMigrationResult,
 } from "../src/lib/syncCore.js";
@@ -278,4 +283,177 @@ test("Test 6: partial migration failure is rejected when local data would become
   );
   assert.doesNotThrow(() => validateMigrationResult(1, 1));
   assert.doesNotThrow(() => validateMigrationResult(0, 0));
+});
+
+test("Multi-device A: PC local A B C with empty remote uploads exactly A B C", () => {
+  const pcRecords = recordsFromData({
+    nextActions: [action("a", "A"), action("b", "B"), action("c", "C")],
+  });
+  const result = mergeBootstrapRecords({
+    localRecords: pcRecords,
+    recoverySource: "legacy",
+    remoteRecords: [],
+  });
+
+  assert.equal(result.localCount, 3);
+  assert.equal(result.remoteCount, 0);
+  assert.equal(countRecords(result.remoteUpserts), 3);
+  assert.deepEqual(
+    dataFromRecords(result.mergedRecords).nextActions.map((item) => item.title).sort(),
+    ["A", "B", "C"],
+  );
+});
+
+test("Multi-device B: phone local D E F contributes after PC already synced A B C", () => {
+  const pcRemote = recordsFromData({
+    nextActions: [action("a", "A"), action("b", "B"), action("c", "C")],
+  });
+  const phoneLocal = recordsFromData({
+    nextActions: [action("d", "D"), action("e", "E"), action("f", "F")],
+  });
+  const result = mergeBootstrapRecords({
+    localRecords: phoneLocal,
+    recoverySource: "legacy",
+    remoteRecords: pcRemote,
+  });
+
+  assert.deepEqual(
+    dataFromRecords(result.mergedRecords).nextActions.map((item) => item.title).sort(),
+    ["A", "B", "C", "D", "E", "F"],
+  );
+  assert.deepEqual(
+    result.remoteUpserts.map((record) => record.id).sort(),
+    ["d", "e", "f"],
+  );
+});
+
+test("Multi-device C: phone conflict with same id keeps a recoverable conflict copy", () => {
+  const remote = recordsFromData({
+    nextActions: [action("same", "PC version")],
+  });
+  const phone = recordsFromData({
+    nextActions: [action("same", "Phone version")],
+  });
+  const result = mergeBootstrapRecords({
+    idFactory: () => "phone-copy",
+    localRecords: phone,
+    recoverySource: "legacy",
+    remoteRecords: remote,
+    timestamp: "2026-08-15T12:00:00.000Z",
+  });
+  const titles = dataFromRecords(result.mergedRecords)
+    .nextActions.map((item) => item.title)
+    .sort();
+
+  assert.equal(result.conflicts.length, 1);
+  assert.deepEqual(titles, ["PC version", "Phone version (conflitto conservato)"]);
+});
+
+test("Multi-device D: account migration completed by PC does not suppress phone local import", () => {
+  const storage = makeStorage({
+    "kaizen:v1:sync:meta": JSON.stringify({
+      migrationCompletedAt: "2026-08-15T11:00:00.000Z",
+      deviceMigrations: {
+        pc: {
+          deviceId: "pc",
+          deviceMigrationCompletedAt: "2026-08-15T11:00:00.000Z",
+        },
+      },
+    }),
+  });
+  const recovery = getBestLocalRecoveryData({
+    rawLegacy: {
+      nextActions: [action("phone-only", "Phone local")],
+    },
+    storage,
+  });
+  const result = mergeBootstrapRecords({
+    localRecords: recovery.records,
+    recoverySource: recovery.source,
+    remoteRecords: recordsFromData({
+      nextActions: [action("pc-only", "PC remote")],
+    }),
+  });
+
+  assert.equal(recovery.legacyCount, 1);
+  assert.deepEqual(
+    dataFromRecords(result.mergedRecords).nextActions.map((item) => item.title).sort(),
+    ["PC remote", "Phone local"],
+  );
+  assert.equal(result.remoteUpserts.length, 1);
+});
+
+test("Multi-device E: remote full and local full always merge instead of replacing", () => {
+  const remote = recordsFromData({
+    nextActions: [action("remote-a", "Remote A"), action("remote-b", "Remote B")],
+  });
+  const local = recordsFromData({
+    nextActions: [action("local-a", "Local A"), action("local-b", "Local B")],
+  });
+  const result = mergeBootstrapRecords({
+    localRecords: local,
+    recoverySource: "legacy",
+    remoteRecords: remote,
+  });
+
+  assert.equal(countRecords(result.mergedRecords), 4);
+  assert.deepEqual(
+    dataFromRecords(result.mergedRecords).nextActions.map((item) => item.title).sort(),
+    ["Local A", "Local B", "Remote A", "Remote B"],
+  );
+});
+
+test("Multi-device F: offline records are queued once and remain retry-safe", () => {
+  const offlineRecords = recordsFromData({
+    nextActions: [action("offline-a", "Offline A"), action("offline-b", "Offline B")],
+  }).filter((record) => record.collection === "nextActions");
+  const queue = queueFromRecords(offlineRecords, "2026-08-15T13:00:00.000Z");
+  const pendingRecords = queue.map((item) => item.record);
+  const result = mergeRecords(pendingRecords, []);
+
+  assert.equal(queue.length, 2);
+  assert.equal(countRecords(result.remoteUpserts), 2);
+  assert.deepEqual(
+    result.remoteUpserts.map((record) => record.id).sort(),
+    ["offline-a", "offline-b"],
+  );
+});
+
+test("Multi-device G: reload after sync can hydrate from cache before remote fetch", () => {
+  const cachedRecords = recordsFromData({
+    nextActions: [action("cached-reload", "Reload visible")],
+  });
+  const recovery = getBestLocalRecoveryData({
+    rawLegacy: { nextActions: [] },
+    syncCacheRecords: cachedRecords,
+  });
+
+  assert.equal(recovery.syncCacheCount, 1);
+  assert.equal(dataFromRecords(recovery.records).nextActions[0].title, "Reload visible");
+});
+
+test("Device snapshot is persistent and usable as recovery when current legacy is empty", () => {
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify([action("snap-a", "Snapshot A")]),
+  });
+  const deviceId = getOrCreateDeviceId(storage);
+  const snapshotKey = createDeviceSnapshot({
+    deviceId,
+    storage,
+    timestamp: "2026-08-15T14:00:00.000Z",
+  });
+  storage.setItem("kaizen:v1:gtd:nextActions", JSON.stringify([]));
+
+  const snapshots = readDeviceSnapshots(storage);
+  const recovery = getBestLocalRecoveryData({
+    rawLegacy: { nextActions: [] },
+    storage,
+    syncCacheRecords: [],
+  });
+
+  assert.equal(snapshotKey, "kaizen_device_snapshot_2026-08-15T14-00-00-000Z");
+  assert.equal(snapshots.length, 1);
+  assert.equal(recovery.snapshotCount, 1);
+  assert.equal(recovery.source, "deviceSnapshot");
+  assert.equal(recovery.data.nextActions[0].title, "Snapshot A");
 });

@@ -195,8 +195,37 @@ textarea:focus-visible {
 
 .sync-diagnostics dd {
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 48%;
   color: #741b34;
   text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.sync-import-box {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  border: 1px solid #ece3dc;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fffdfa;
+}
+
+.sync-import-box p {
+  display: grid;
+  gap: 4px;
+}
+
+.sync-import-box strong {
+  color: #2c2122;
+  font-size: 0.86rem;
+}
+
+.sync-import-box span {
+  color: #6f6260;
+  font-size: 0.82rem;
+  font-weight: 750;
 }
 
 .visually-hidden {

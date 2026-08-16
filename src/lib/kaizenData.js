@@ -22,6 +22,7 @@ export const STORAGE_KEYS = {
   syncCache: "kaizen:v1:sync:cache",
   syncQueue: "kaizen:v1:sync:queue",
   syncMeta: "kaizen:v1:sync:meta",
+  deviceId: "kaizen:v1:deviceId",
 };
 
 export const MIGRATION_VERSION = 1;

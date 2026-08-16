@@ -23,10 +23,14 @@ export function nowIso() {
 }
 
 export function readLegacyData() {
+  return readLegacyDataFromStorage(getBrowserStorage());
+}
+
+export function readLegacyDataFromStorage(storage = getBrowserStorage()) {
   return Object.fromEntries(
     COLLECTIONS.map((collection) => [
       collection.name,
-      readStorage(collection.storageKey, cloneValue(collection.fallback)),
+      readStorageFrom(storage, collection.storageKey, cloneValue(collection.fallback)),
     ]),
   );
 }
@@ -108,18 +112,111 @@ export function readLatestLegacyBackup(storage = getBrowserStorage()) {
   return findLatestBackupWithData(readLegacyBackups(storage));
 }
 
+export function getOrCreateDeviceId(storage = getBrowserStorage()) {
+  if (!storage) {
+    return "server";
+  }
+
+  const existing = storage.getItem(STORAGE_KEYS.deviceId);
+
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing);
+      return typeof parsed === "string" ? parsed : String(parsed);
+    } catch {
+      return existing;
+    }
+  }
+
+  const deviceId = createId();
+  storage.setItem(STORAGE_KEYS.deviceId, JSON.stringify(deviceId));
+  return deviceId;
+}
+
+export function createDeviceSnapshot(options = {}) {
+  const storage = options.storage || getBrowserStorage();
+  const timestamp = options.timestamp || nowIso();
+  const deviceId = options.deviceId || getOrCreateDeviceId(storage);
+
+  if (!storage) {
+    return "";
+  }
+
+  const snapshot = {
+    createdAt: timestamp,
+    deviceId,
+    migrationVersion: MIGRATION_VERSION,
+    keys: readRelevantStorageKeys(storage),
+    data: readLegacyDataFromStorage(storage),
+  };
+  const snapshotKey = `kaizen_device_snapshot_${timestamp.replace(/[:.]/g, "-")}`;
+  storage.setItem(snapshotKey, JSON.stringify(snapshot));
+  return snapshotKey;
+}
+
+export function readDeviceSnapshots(storage = getBrowserStorage()) {
+  if (!storage) {
+    return [];
+  }
+
+  const snapshots = [];
+
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+
+      if (!key?.startsWith("kaizen_device_snapshot_")) {
+        continue;
+      }
+
+      const rawValue = storage.getItem(key);
+      const parsed = rawValue ? JSON.parse(rawValue) : null;
+      const data = parsed?.data;
+
+      if (!data || typeof data !== "object") {
+        continue;
+      }
+
+      snapshots.push({
+        key,
+        createdAt: parsed.createdAt || key.replace("kaizen_device_snapshot_", ""),
+        data,
+        deviceId: parsed.deviceId || "",
+        keys: parsed.keys || {},
+      });
+    }
+  } catch (error) {
+    console.warn("Kaizen device snapshot scan failed", error);
+  }
+
+  return snapshots.sort((left, right) =>
+    String(right.createdAt || right.key).localeCompare(String(left.createdAt || left.key)),
+  );
+}
+
+export function readLatestDeviceSnapshot(storage = getBrowserStorage()) {
+  return findLatestBackupWithData(readDeviceSnapshots(storage));
+}
+
 export function getBestLocalRecoveryData(options = {}) {
   const timestamp = options.timestamp || nowIso();
   const idFactory = options.idFactory || createId;
-  const rawLegacy = options.rawLegacy || readLegacyData();
+  const storage = options.storage || getBrowserStorage();
+  const rawLegacy = options.rawLegacy || readLegacyDataFromStorage(storage);
   const normalizedLegacy = normalizeLegacyData(rawLegacy, timestamp, idFactory);
   const legacyCount = countDataItems(normalizedLegacy.data);
   const latestBackup =
-    options.latestBackup || findLatestBackupWithData(readLegacyBackups(options.storage));
+    options.latestBackup || findLatestBackupWithData(readLegacyBackups(storage));
   const normalizedBackup = latestBackup?.data
     ? normalizeLegacyData(latestBackup.data, timestamp, idFactory)
     : null;
   const backupCount = normalizedBackup ? countDataItems(normalizedBackup.data) : 0;
+  const latestSnapshot =
+    options.latestSnapshot || findLatestBackupWithData(readDeviceSnapshots(storage));
+  const normalizedSnapshot = latestSnapshot?.data
+    ? normalizeLegacyData(latestSnapshot.data, timestamp, idFactory)
+    : null;
+  const snapshotCount = normalizedSnapshot ? countDataItems(normalizedSnapshot.data) : 0;
   const syncCacheRecords = options.syncCacheRecords || readSyncCache().records || [];
   const syncCacheCount = countRecords(syncCacheRecords);
   const sources = [];
@@ -143,6 +240,16 @@ export function getBestLocalRecoveryData(options = {}) {
     });
   }
 
+  if (snapshotCount > 0) {
+    sources.push({
+      count: snapshotCount,
+      key: latestSnapshot.key,
+      name: "deviceSnapshot",
+      records: recordsFromData(normalizedSnapshot.data, timestamp),
+      warnings: normalizedSnapshot.warnings,
+    });
+  }
+
   if (syncCacheCount > 0) {
     sources.push({
       count: syncCacheCount,
@@ -160,6 +267,8 @@ export function getBestLocalRecoveryData(options = {}) {
       legacyCount,
       records: recordsFromData(normalizedLegacy.data, timestamp),
       source: "emptyLegacy",
+      snapshotCount,
+      snapshotKey: latestSnapshot?.key || "",
       syncCacheCount,
       warnings: normalizedLegacy.warnings,
     };
@@ -174,6 +283,8 @@ export function getBestLocalRecoveryData(options = {}) {
     legacyCount,
     records: merged.records,
     source: merged.source,
+    snapshotCount,
+    snapshotKey: latestSnapshot?.key || "",
     syncCacheCount,
     warnings: merged.warnings,
   };
@@ -743,6 +854,53 @@ function isMeaningfulSingleton(value, fallback) {
 
 function getBrowserStorage() {
   return typeof window !== "undefined" ? window.localStorage : undefined;
+}
+
+function readStorageFrom(storage, key, fallback) {
+  try {
+    const value = storage?.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readRelevantStorageKeys(storage) {
+  const keys = {};
+  const knownKeys = new Set(Object.values(STORAGE_KEYS));
+
+  for (const collection of COLLECTIONS) {
+    knownKeys.add(collection.storageKey);
+  }
+
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+
+      if (!isRelevantKaizenStorageKey(key, knownKeys)) {
+        continue;
+      }
+
+      keys[key] = storage.getItem(key);
+    }
+  } catch (error) {
+    console.warn("Kaizen storage snapshot failed", error);
+  }
+
+  return keys;
+}
+
+function isRelevantKaizenStorageKey(key, knownKeys) {
+  if (!key || key.startsWith("kaizen_device_snapshot_")) {
+    return false;
+  }
+
+  return (
+    knownKeys.has(key) ||
+    key.startsWith("kaizen:v1:") ||
+    key.startsWith("kaizen_legacy_backup_") ||
+    key.startsWith("gtd:")
+  );
 }
 
 function findLatestBackupWithData(backups) {
