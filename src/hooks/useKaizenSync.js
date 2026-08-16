@@ -4,6 +4,7 @@ import { supabase, supabaseConfig } from "../lib/supabaseClient.js";
 import {
   applyChangedRecords,
   analyzeDuplicateRecords,
+  clearLocalKaizenDataForAccount,
   countDataItems,
   countRecords,
   createDeviceSnapshot,
@@ -61,7 +62,7 @@ export function useKaizenSync({ data, onReplaceData }) {
     const currentDeviceId = getOrCreateDeviceId();
     return {
       deviceId: currentDeviceId,
-      initialSnapshotKey: createDeviceSnapshot({ deviceId: currentDeviceId }),
+      initialSnapshotKey: "",
     };
   });
   const deviceId = deviceContext.deviceId;
@@ -370,7 +371,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       setStatus(navigator.onLine ? STATUS.syncing : STATUS.offline);
 
       const timestamp = new Date().toISOString();
-      const snapshotKey = createDeviceSnapshot({ deviceId, timestamp });
+      const snapshotKey = "";
       const rawLocal = readLegacyData();
       const recovery = getBestLocalRecoveryData({
         includeRecoverySources: false,
@@ -383,9 +384,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       const sourceAlreadyImported =
         previousDeviceMigration.deviceMigrationCompletedAt &&
         previousDeviceMigration.sourceFingerprint === sourceFingerprint;
-      const backupKey = sourceAlreadyImported
-        ? previousDeviceMigration.legacyBackupKey || ""
-        : createLegacyBackup(rawLocal, timestamp);
+      const backupKey = previousDeviceMigration.legacyBackupKey || "";
       const deviceMigrationId = `${deviceId}:${timestamp}`;
 
       if (localCount > 0) {
@@ -558,6 +557,7 @@ export function useKaizenSync({ data, onReplaceData }) {
     canUseCloud,
     deviceId,
     enqueueRecords,
+    ignoreLocalForCloudImport,
     lastSuccessfulSyncAt,
     replaceFromRecords,
     user?.id,
@@ -687,7 +687,11 @@ export function useKaizenSync({ data, onReplaceData }) {
 
     const timestamp = new Date().toISOString();
     const deviceMigrationId = `${deviceId}:manual:${timestamp}`;
-    const snapshotKey = createDeviceSnapshot({ deviceId, timestamp });
+    const snapshotKey = createDeviceSnapshot({
+      deviceId,
+      reason: "pre-import",
+      timestamp,
+    });
     const rawLocal = readLegacyData();
     const backupKey = createLegacyBackup(rawLocal, timestamp);
     const recovery = getBestLocalRecoveryData({
@@ -825,10 +829,15 @@ export function useKaizenSync({ data, onReplaceData }) {
     }
 
     const timestamp = new Date().toISOString();
-    const snapshotKey = createDeviceSnapshot({ deviceId, timestamp });
+    const snapshotKey = createDeviceSnapshot({
+      deviceId,
+      reason: "pre-replace-from-account",
+      timestamp,
+    });
     const remoteRecords = await fetchRemoteRecords();
     const remoteCount = countRecords(remoteRecords);
 
+    clearLocalKaizenDataForAccount();
     replaceFromRecords(remoteRecords);
     writeDeviceSettings({
       ignoreLocalForCloudImport: true,

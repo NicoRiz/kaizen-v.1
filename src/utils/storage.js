@@ -9,7 +9,13 @@ export function readStorage(key, fallback) {
 }
 
 export function writeStorage(key, value) {
-  getStorage()?.setItem(key, JSON.stringify(value));
+  try {
+    getStorage()?.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (error) {
+    console.warn(`Kaizen localStorage write failed for ${key}`, error);
+    return false;
+  }
 }
 
 function getStorage() {

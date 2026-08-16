@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyChangedRecords,
   analyzeDuplicateRecords,
+  clearLocalKaizenDataForAccount,
   countRecords,
   createDuplicateRemovalPlan,
   createDeviceSnapshot,
@@ -17,6 +18,7 @@ import {
   mergeQueuedRecords,
   normalizeLegacyData,
   planBootstrapSync,
+  pruneDeviceSnapshots,
   queueFromRecords,
   readDeviceSnapshots,
   recordsFromData,
@@ -48,8 +50,42 @@ function makeStorage(entries) {
     key(index) {
       return [...map.keys()][index] || null;
     },
+    removeItem(key) {
+      map.delete(key);
+    },
     setItem(key, value) {
       map.set(key, value);
+    },
+  };
+}
+
+function makeQuotaStorage(entries, options = {}) {
+  const storage = makeStorage(entries);
+  let shouldThrow = Boolean(options.throwUntilSnapshotCountBelow);
+
+  return {
+    get length() {
+      return storage.length;
+    },
+    getItem: storage.getItem,
+    key: storage.key,
+    removeItem: storage.removeItem,
+    setItem(key, value) {
+      const snapshotCount = Array.from({ length: storage.length }, (_, index) =>
+        storage.key(index),
+      ).filter((item) => item?.startsWith("kaizen_device_snapshot_")).length;
+
+      if (
+        key.startsWith("kaizen_device_snapshot_") &&
+        (options.alwaysThrow || (shouldThrow && snapshotCount >= options.throwUntilSnapshotCountBelow))
+      ) {
+        const error = new Error("quota");
+        error.name = "QuotaExceededError";
+        shouldThrow = false;
+        throw error;
+      }
+
+      storage.setItem(key, value);
     },
   };
 }
@@ -788,4 +824,164 @@ test("Reset E: replacing dirty PC local with account makes PC 50 and remote rema
   assert.equal(countRecords(pcDirty), 162);
   assert.equal(replacedPcData.nextActions.length, 50);
   assert.equal(countRecords(remote), 50);
+});
+
+test("Quota A: snapshot quota failure is non-fatal", () => {
+  const storage = makeQuotaStorage(
+    {
+      "kaizen:v1:gtd:nextActions": JSON.stringify([action("a", "A")]),
+    },
+    { alwaysThrow: true },
+  );
+
+  assert.doesNotThrow(() =>
+    createDeviceSnapshot({
+      deviceId: "pc",
+      storage,
+      timestamp: "2026-08-16T11:15:13.246Z",
+    }),
+  );
+  assert.equal(
+    createDeviceSnapshot({
+      deviceId: "pc",
+      storage,
+      timestamp: "2026-08-16T11:15:14.246Z",
+    }),
+    "",
+  );
+});
+
+test("Quota B: 10 normal bootstraps do not create device snapshots", () => {
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify([action("a", "A")]),
+  });
+
+  for (let index = 0; index < 10; index += 1) {
+    const recovery = getBestLocalRecoveryData({
+      rawLegacy: {
+        nextActions: [action("a", "A")],
+      },
+      storage,
+    });
+    planBootstrapSync({
+      localRecords: recovery.records,
+      recoverySource: recovery.source,
+      remoteRecords: [],
+    });
+  }
+
+  assert.equal(readDeviceSnapshots(storage).length, 0);
+});
+
+test("Quota C: snapshot stores dataset only and does not contain nested snapshots", () => {
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify([action("a", "A")]),
+    "kaizen:v1:sync:cache": JSON.stringify({
+      records: recordsFromData({ nextActions: [action("cache", "Cache")] }),
+    }),
+    "kaizen_device_snapshot_old": JSON.stringify({
+      createdAt: "2026-08-16T10:00:00.000Z",
+      data: { nextActions: [action("old", "Old")] },
+      deviceId: "pc",
+    }),
+  });
+  const key = createDeviceSnapshot({
+    deviceId: "pc",
+    storage,
+    timestamp: "2026-08-16T11:00:00.000Z",
+  });
+  const snapshot = JSON.parse(storage.getItem(key));
+
+  assert.equal(Object.hasOwn(snapshot, "keys"), false);
+  assert.equal(JSON.stringify(snapshot).includes("kaizen_device_snapshot_"), false);
+  assert.equal(JSON.stringify(snapshot).includes("sync:cache"), false);
+  assert.equal(snapshot.data.nextActions.length, 1);
+});
+
+test("Quota D: snapshot retention removes only oldest device snapshots", () => {
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify([action("a", "A")]),
+    "kaizen_legacy_backup_keep": JSON.stringify({
+      createdAt: "2026-08-16T09:00:00.000Z",
+      data: { nextActions: [action("backup", "Backup")] },
+    }),
+    ...Object.fromEntries(
+      Array.from({ length: 5 }, (_, index) => [
+        `kaizen_device_snapshot_2026-08-16T10-0${index}-00-000Z`,
+        JSON.stringify({
+          createdAt: `2026-08-16T10:0${index}:00.000Z`,
+          data: { nextActions: [action(`snap-${index}`, `Snap ${index}`)] },
+          deviceId: "pc",
+        }),
+      ]),
+    ),
+  });
+
+  createDeviceSnapshot({
+    deviceId: "pc",
+    storage,
+    timestamp: "2026-08-16T11:00:00.000Z",
+  });
+
+  assert.equal(readDeviceSnapshots(storage).length, 5);
+  assert.ok(storage.getItem("kaizen_legacy_backup_keep"));
+  assert.equal(storage.getItem("kaizen_device_snapshot_2026-08-16T10-00-00-000Z"), null);
+});
+
+test("Quota E: local dirty storage can be replaced with remote data without changing remote", () => {
+  const remote = recordsFromData({
+    nextActions: Array.from({ length: 50 }, (_, index) =>
+      action(`phone-${index}`, `Phone ${index}`),
+    ),
+  });
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify(
+      Array.from({ length: 162 }, (_, index) => action(`pc-${index}`, `PC ${index}`)),
+    ),
+    "kaizen:v1:sync:cache": JSON.stringify({ records: [] }),
+    "kaizen_device_snapshot_old": JSON.stringify({
+      createdAt: "2026-08-16T10:00:00.000Z",
+      data: { nextActions: [action("old", "Old")] },
+      deviceId: "pc",
+    }),
+    "kaizen:v1:supabase:auth": JSON.stringify({ token: "keep" }),
+  });
+
+  clearLocalKaizenDataForAccount(storage);
+  storage.setItem(
+    "kaizen:v1:gtd:nextActions",
+    JSON.stringify(dataFromRecords(remote).nextActions),
+  );
+
+  assert.equal(JSON.parse(storage.getItem("kaizen:v1:gtd:nextActions")).length, 50);
+  assert.equal(storage.getItem("kaizen_device_snapshot_old"), null);
+  assert.ok(storage.getItem("kaizen:v1:supabase:auth"));
+  assert.equal(countRecords(remote), 50);
+});
+
+test("Quota F: quota exceeded during pre-replace snapshot still allows replace", () => {
+  const remote = recordsFromData({
+    nextActions: [action("phone", "Phone")],
+  });
+  const storage = makeQuotaStorage(
+    {
+      "kaizen:v1:gtd:nextActions": JSON.stringify([action("pc", "PC")]),
+    },
+    { alwaysThrow: true },
+  );
+  const snapshotKey = createDeviceSnapshot({
+    deviceId: "pc",
+    reason: "pre-replace-from-account",
+    storage,
+    timestamp: "2026-08-16T11:00:00.000Z",
+  });
+
+  clearLocalKaizenDataForAccount(storage);
+  storage.setItem(
+    "kaizen:v1:gtd:nextActions",
+    JSON.stringify(dataFromRecords(remote).nextActions),
+  );
+
+  assert.equal(snapshotKey, "");
+  assert.equal(JSON.parse(storage.getItem("kaizen:v1:gtd:nextActions"))[0].title, "Phone");
 });

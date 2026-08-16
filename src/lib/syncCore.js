@@ -9,6 +9,9 @@ import {
 import { readStorage, writeStorage } from "../utils/storage.js";
 
 const ISO_FALLBACK = "1970-01-01T00:00:00.000Z";
+const DEVICE_SNAPSHOT_PREFIX = "kaizen_device_snapshot_";
+const MAX_DEVICE_SNAPSHOTS = 5;
+
 function defaultLegacyIdFactory(context = {}) {
   return createStableLegacyId(context.collection, context.item, context.index);
 }
@@ -132,7 +135,7 @@ export function getOrCreateDeviceId(storage = getBrowserStorage()) {
   }
 
   const deviceId = createId();
-  storage.setItem(STORAGE_KEYS.deviceId, JSON.stringify(deviceId));
+  safeStorageSet(storage, STORAGE_KEYS.deviceId, JSON.stringify(deviceId));
   return deviceId;
 }
 
@@ -140,21 +143,50 @@ export function createDeviceSnapshot(options = {}) {
   const storage = options.storage || getBrowserStorage();
   const timestamp = options.timestamp || nowIso();
   const deviceId = options.deviceId || getOrCreateDeviceId(storage);
+  const reason = options.reason || "manual";
 
   if (!storage) {
     return "";
   }
 
+  pruneDeviceSnapshots(storage, MAX_DEVICE_SNAPSHOTS - 1);
+
   const snapshot = {
     createdAt: timestamp,
     deviceId,
     migrationVersion: MIGRATION_VERSION,
-    keys: readRelevantStorageKeys(storage),
+    reason,
+    recordCount: countDataItems(readLegacyDataFromStorage(storage)),
     data: readLegacyDataFromStorage(storage),
   };
-  const snapshotKey = `kaizen_device_snapshot_${timestamp.replace(/[:.]/g, "-")}`;
-  storage.setItem(snapshotKey, JSON.stringify(snapshot));
-  return snapshotKey;
+  const snapshotKey = `${DEVICE_SNAPSHOT_PREFIX}${timestamp.replace(/[:.]/g, "-")}`;
+  const serialized = safeSerialize(snapshot);
+
+  if (!serialized) {
+    console.warn("Kaizen device snapshot skipped: JSON serialization failed.");
+    return "";
+  }
+
+  const firstAttempt = safeStorageSet(storage, snapshotKey, serialized);
+
+  if (firstAttempt.ok) {
+    return snapshotKey;
+  }
+
+  if (isQuotaError(firstAttempt.error)) {
+    pruneDeviceSnapshots(storage, 1);
+    const retry = safeStorageSet(storage, snapshotKey, serialized);
+
+    if (retry.ok) {
+      return snapshotKey;
+    }
+
+    console.warn("Kaizen device snapshot skipped after quota cleanup.", retry.error);
+    return "";
+  }
+
+  console.warn("Kaizen device snapshot skipped.", firstAttempt.error);
+  return "";
 }
 
 export function readDeviceSnapshots(storage = getBrowserStorage()) {
@@ -168,7 +200,7 @@ export function readDeviceSnapshots(storage = getBrowserStorage()) {
     for (let index = 0; index < storage.length; index += 1) {
       const key = storage.key(index);
 
-      if (!key?.startsWith("kaizen_device_snapshot_")) {
+      if (!key?.startsWith(DEVICE_SNAPSHOT_PREFIX)) {
         continue;
       }
 
@@ -182,10 +214,10 @@ export function readDeviceSnapshots(storage = getBrowserStorage()) {
 
       snapshots.push({
         key,
-        createdAt: parsed.createdAt || key.replace("kaizen_device_snapshot_", ""),
+        createdAt: parsed.createdAt || key.replace(DEVICE_SNAPSHOT_PREFIX, ""),
         data,
         deviceId: parsed.deviceId || "",
-        keys: parsed.keys || {},
+        reason: parsed.reason || "",
         recordCount: countDataItems(normalizeLegacyData(data).data),
         sizeBytes: rawValue?.length || 0,
       });
@@ -298,7 +330,7 @@ export function getBestLocalRecoveryData(options = {}) {
 
 export function createLegacyBackup(snapshot, timestamp = nowIso()) {
   const backupKey = `kaizen_legacy_backup_${timestamp.replace(/[:.]/g, "-")}`;
-  writeStorage(backupKey, {
+  const saved = writeStorage(backupKey, {
     createdAt: timestamp,
     migrationVersion: MIGRATION_VERSION,
     keys: Object.fromEntries(
@@ -306,7 +338,7 @@ export function createLegacyBackup(snapshot, timestamp = nowIso()) {
     ),
     data: snapshot,
   });
-  return backupKey;
+  return saved ? backupKey : "";
 }
 
 export function readSyncCache() {
@@ -873,6 +905,58 @@ export function summarizeDeviceSnapshots(storage = getBrowserStorage()) {
   }));
 }
 
+export function pruneDeviceSnapshots(storage = getBrowserStorage(), keep = MAX_DEVICE_SNAPSHOTS) {
+  if (!storage) {
+    return 0;
+  }
+
+  const snapshots = readDeviceSnapshots(storage);
+  const removable = snapshots.slice(Math.max(0, keep));
+  let removed = 0;
+
+  for (const snapshot of removable) {
+    try {
+      storage.removeItem(snapshot.key);
+      removed += 1;
+    } catch (error) {
+      console.warn("Kaizen device snapshot cleanup failed", error);
+    }
+  }
+
+  return removed;
+}
+
+export function clearLocalKaizenDataForAccount(storage = getBrowserStorage()) {
+  if (!storage) {
+    return 0;
+  }
+
+  const keysToRemove = new Set([
+    STORAGE_KEYS.syncCache,
+    STORAGE_KEYS.syncQueue,
+    STORAGE_KEYS.syncMeta,
+    STORAGE_KEYS.migration,
+  ]);
+
+  for (const collection of COLLECTIONS) {
+    keysToRemove.add(collection.storageKey);
+  }
+
+  let removed = 0;
+
+  for (const key of keysToRemove) {
+    try {
+      storage.removeItem(key);
+      removed += 1;
+    } catch (error) {
+      console.warn(`Kaizen local cleanup failed for ${key}`, error);
+    }
+  }
+
+  removed += pruneDeviceSnapshots(storage, 0);
+  return removed;
+}
+
 export function analyzeDuplicateRecords(records = []) {
   const activeRecords = records.filter((record) => !record.deleted_at);
   const groups = new Map();
@@ -1054,42 +1138,40 @@ function readStorageFrom(storage, key, fallback) {
   }
 }
 
-function readRelevantStorageKeys(storage) {
-  const keys = {};
-  const knownKeys = new Set(Object.values(STORAGE_KEYS));
-
-  for (const collection of COLLECTIONS) {
-    knownKeys.add(collection.storageKey);
-  }
-
+function safeSerialize(value) {
   try {
-    for (let index = 0; index < storage.length; index += 1) {
-      const key = storage.key(index);
-
-      if (!isRelevantKaizenStorageKey(key, knownKeys)) {
-        continue;
-      }
-
-      keys[key] = storage.getItem(key);
-    }
+    return JSON.stringify(value);
   } catch (error) {
-    console.warn("Kaizen storage snapshot failed", error);
+    console.warn("Kaizen JSON serialization failed", error);
+    return "";
   }
-
-  return keys;
 }
 
-function isRelevantKaizenStorageKey(key, knownKeys) {
-  if (!key || key.startsWith("kaizen_device_snapshot_")) {
-    return false;
+function safeStorageSet(storage, key, value) {
+  try {
+    storage?.setItem(key, value);
+    return { ok: true };
+  } catch (error) {
+    if (isQuotaError(error) || isSecurityError(error)) {
+      console.warn(`Kaizen localStorage setItem failed for ${key}`, error);
+    } else {
+      console.warn(`Kaizen localStorage setItem failed for ${key}`, error);
+    }
+    return { error, ok: false };
   }
+}
 
+function isQuotaError(error) {
   return (
-    knownKeys.has(key) ||
-    key.startsWith("kaizen:v1:") ||
-    key.startsWith("kaizen_legacy_backup_") ||
-    key.startsWith("gtd:")
+    error?.name === "QuotaExceededError" ||
+    error?.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    error?.code === 22 ||
+    error?.code === 1014
   );
+}
+
+function isSecurityError(error) {
+  return error?.name === "SecurityError";
 }
 
 function findLatestBackupWithData(backups) {
