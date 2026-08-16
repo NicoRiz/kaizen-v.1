@@ -14,6 +14,7 @@ export default function SyncStatus({ sync }) {
   const [isOpen, setIsOpen] = useState(false);
   const [importMessage, setImportMessage] = useState("");
   const [isImportingLocal, setIsImportingLocal] = useState(false);
+  const [isAnalyzingDuplicates, setIsAnalyzingDuplicates] = useState(false);
   const fileInputRef = useRef(null);
   const label = STATUS_LABELS[sync.status] || "Sync";
   const localRecordCount =
@@ -62,6 +63,23 @@ export default function SyncStatus({ sync }) {
       setImportMessage("Import locale non completato. I dati locali e gli snapshot restano salvati.");
     } finally {
       setIsImportingLocal(false);
+    }
+  }
+
+  async function handleDuplicateAnalysis() {
+    setIsAnalyzingDuplicates(true);
+    setImportMessage("");
+
+    try {
+      const result = await sync.analyzeAccountDuplicates();
+      setImportMessage(
+        `Analisi duplicati: record totali ${result.totalCount}, unici stimati ${result.uniqueCount}, duplicati rilevati ${result.duplicateCount}.`,
+      );
+    } catch (error) {
+      console.error("Kaizen duplicate analysis error", error);
+      setImportMessage("Analisi duplicati non riuscita. Nessun dato e' stato modificato.");
+    } finally {
+      setIsAnalyzingDuplicates(false);
     }
   }
 
@@ -179,6 +197,45 @@ export default function SyncStatus({ sync }) {
                     ? "Importazione..."
                     : "Importa dati locali in questo account"}
                 </button>
+              </div>
+            )}
+
+            <div className="sync-import-box">
+              <p>
+                <strong>Deduplica sicura</strong>
+                <span>
+                  {sync.diagnostics?.duplicateAnalysis
+                    ? `Totali ${sync.diagnostics.duplicateAnalysis.totalCount}, unici ${sync.diagnostics.duplicateAnalysis.uniqueCount}, duplicati ${sync.diagnostics.duplicateAnalysis.duplicateCount}`
+                    : "Analisi solo lettura, nessuna cancellazione automatica"}
+                </span>
+              </p>
+              <button
+                className="secondary-button"
+                disabled={isAnalyzingDuplicates}
+                onClick={handleDuplicateAnalysis}
+                type="button"
+              >
+                {isAnalyzingDuplicates ? "Analisi..." : "Analizza duplicati"}
+              </button>
+              <button className="secondary-button danger-button" disabled type="button">
+                Rimuovi duplicati
+              </button>
+            </div>
+
+            {sync.diagnostics?.snapshotSummaries?.length > 0 && (
+              <div className="sync-snapshot-list">
+                <p className="eyebrow">Snapshot disponibili</p>
+                <ul>
+                  {sync.diagnostics.snapshotSummaries.slice(0, 8).map((snapshot) => (
+                    <li key={snapshot.key}>
+                      <strong>{snapshot.recordCount} record</strong>
+                      <span>{snapshot.createdAt}</span>
+                      <small>
+                        {snapshot.deviceId || "device n/d"} · {snapshot.sizeBytes} byte
+                      </small>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
 

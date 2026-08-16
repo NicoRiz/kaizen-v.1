@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyChangedRecords,
+  analyzeDuplicateRecords,
   countRecords,
+  createDuplicateRemovalPlan,
   createDeviceSnapshot,
   dataFromRecords,
   diffCollectionRecords,
+  fingerprintRecords,
   getBestLocalRecoveryData,
   getOrCreateDeviceId,
   mergeBootstrapRecords,
   mergeRecords,
+  mergeQueuedRecords,
   normalizeLegacyData,
   queueFromRecords,
   readDeviceSnapshots,
@@ -232,6 +236,7 @@ test("Test 3: empty legacy keys recover from the newest valid legacy backup", ()
   });
 
   const recovery = getBestLocalRecoveryData({
+    includeRecoverySources: true,
     rawLegacy: { nextActions: [] },
     storage,
   });
@@ -446,6 +451,7 @@ test("Device snapshot is persistent and usable as recovery when current legacy i
 
   const snapshots = readDeviceSnapshots(storage);
   const recovery = getBestLocalRecoveryData({
+    includeRecoverySources: true,
     rawLegacy: { nextActions: [] },
     storage,
     syncCacheRecords: [],
@@ -456,4 +462,232 @@ test("Device snapshot is persistent and usable as recovery when current legacy i
   assert.equal(recovery.snapshotCount, 1);
   assert.equal(recovery.source, "deviceSnapshot");
   assert.equal(recovery.data.nextActions[0].title, "Snapshot A");
+});
+
+test("Idempotence: 24 local records stay 24 across 10 bootstraps with backup snapshot cache and remote", () => {
+  const localData = {
+    nextActions: Array.from({ length: 24 }, (_, index) =>
+      action(`id-${index}`, `Item ${index}`),
+    ),
+  };
+  const localRecords = recordsFromData(localData);
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify(localData.nextActions),
+    "kaizen:v1:sync:cache": JSON.stringify({ records: localRecords }),
+    "kaizen_legacy_backup_2026-08-15T09-00-00-000Z": JSON.stringify({
+      createdAt: "2026-08-15T09:00:00.000Z",
+      data: localData,
+    }),
+    "kaizen_device_snapshot_2026-08-15T09-00-00-000Z": JSON.stringify({
+      createdAt: "2026-08-15T09:00:00.000Z",
+      data: localData,
+      deviceId: "pc",
+      keys: {},
+    }),
+  });
+
+  let remoteRecords = [];
+
+  for (let iteration = 0; iteration < 10; iteration += 1) {
+    const recovery = getBestLocalRecoveryData({
+      rawLegacy: localData,
+      storage,
+      syncCacheRecords: localRecords,
+    });
+    const merged = mergeBootstrapRecords({
+      localRecords: recovery.records,
+      recoverySource: recovery.source,
+      remoteRecords,
+    });
+
+    assert.equal(recovery.source, "legacy");
+    assert.equal(merged.mergedCount, 24);
+    assert.equal(countRecords(merged.mergedRecords), 24);
+    remoteRecords = merged.mergedRecords;
+  }
+
+  assert.equal(countRecords(remoteRecords), 24);
+});
+
+test("Idempotence: legacy-free reload uses cache once and does not add backup or snapshot copies", () => {
+  const cachedRecords = recordsFromData({
+    nextActions: Array.from({ length: 24 }, (_, index) =>
+      action(`cached-${index}`, `Cached ${index}`),
+    ),
+  });
+  const backupData = {
+    nextActions: Array.from({ length: 24 }, (_, index) =>
+      action(`backup-${index}`, `Backup ${index}`),
+    ),
+  };
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify([]),
+    "kaizen:v1:sync:cache": JSON.stringify({ records: cachedRecords }),
+    "kaizen_legacy_backup_2026-08-15T09-00-00-000Z": JSON.stringify({
+      createdAt: "2026-08-15T09:00:00.000Z",
+      data: backupData,
+    }),
+    "kaizen_device_snapshot_2026-08-15T09-00-00-000Z": JSON.stringify({
+      createdAt: "2026-08-15T09:00:00.000Z",
+      data: backupData,
+      deviceId: "pc",
+      keys: {},
+    }),
+  });
+  const recovery = getBestLocalRecoveryData({
+    rawLegacy: { nextActions: [] },
+    storage,
+    syncCacheRecords: cachedRecords,
+  });
+  const merged = mergeBootstrapRecords({
+    localRecords: recovery.records,
+    recoverySource: recovery.source,
+    remoteRecords: cachedRecords,
+  });
+
+  assert.equal(recovery.source, "syncCache");
+  assert.equal(merged.mergedCount, 24);
+  assert.equal(countRecords(merged.mergedRecords), 24);
+});
+
+test("Multi-device idempotence: PC and phone reopens do not duplicate merged account data", () => {
+  const pc = recordsFromData({
+    nextActions: [action("a", "A"), action("b", "B"), action("c", "C")],
+  });
+  let remote = mergeBootstrapRecords({
+    localRecords: pc,
+    recoverySource: "legacy",
+    remoteRecords: [],
+  }).mergedRecords;
+
+  for (let iteration = 0; iteration < 5; iteration += 1) {
+    const reopenedPc = mergeBootstrapRecords({
+      localRecords: pc,
+      recoverySource: "legacy",
+      remoteRecords: remote,
+    });
+    assert.equal(reopenedPc.mergedCount, 3);
+    remote = reopenedPc.mergedRecords;
+  }
+
+  const phone = recordsFromData({
+    nextActions: [action("d", "D"), action("e", "E")],
+  });
+  remote = mergeBootstrapRecords({
+    localRecords: phone,
+    recoverySource: "legacy",
+    remoteRecords: remote,
+  }).mergedRecords;
+
+  assert.deepEqual(
+    dataFromRecords(remote).nextActions.map((item) => item.title).sort(),
+    ["A", "B", "C", "D", "E"],
+  );
+
+  const pcAfterPhone = mergeBootstrapRecords({
+    localRecords: remote,
+    recoverySource: "legacy",
+    remoteRecords: remote,
+  });
+  const phoneAfterPhone = mergeBootstrapRecords({
+    localRecords: remote,
+    recoverySource: "legacy",
+    remoteRecords: remote,
+  });
+
+  assert.equal(pcAfterPhone.mergedCount, 5);
+  assert.equal(phoneAfterPhone.mergedCount, 5);
+});
+
+test("Legacy records without ids get deterministic ids across repeated normalization", () => {
+  const legacy = {
+    nextActions: [
+      {
+        title: "No id stable",
+        createdAt: "2026-08-15T09:00:00.000Z",
+      },
+    ],
+  };
+  const first = normalizeLegacyData(legacy);
+  const second = normalizeLegacyData(legacy);
+
+  assert.equal(first.data.nextActions[0].id, second.data.nextActions[0].id);
+  assert.match(first.data.nextActions[0].id, /^legacy-nextActions-/);
+});
+
+test("Conflict copies are deterministic and do not multiply on repeated bootstrap", () => {
+  const local = recordsFromData({
+    nextActions: [action("same", "Local")],
+  });
+  const remote = recordsFromData({
+    nextActions: [action("same", "Remote")],
+  });
+  const first = mergeBootstrapRecords({
+    localRecords: local,
+    recoverySource: "legacy",
+    remoteRecords: remote,
+  });
+  const second = mergeBootstrapRecords({
+    localRecords: local,
+    recoverySource: "legacy",
+    remoteRecords: first.mergedRecords,
+  });
+
+  assert.equal(first.conflicts.length, 1);
+  assert.equal(second.conflicts.length, 1);
+  assert.equal(countRecords(first.mergedRecords), 2);
+  assert.equal(countRecords(second.mergedRecords), 2);
+  assert.equal(
+    first.conflicts[0].preservedAs,
+    second.conflicts[0].preservedAs,
+  );
+});
+
+test("Sync queue deduplicates repeated pending records by collection and id", () => {
+  const records = recordsFromData({
+    nextActions: [action("offline-a", "Offline A")],
+  }).filter((record) => record.collection === "nextActions");
+  const firstQueue = mergeQueuedRecords([], records);
+  const secondQueue = mergeQueuedRecords(firstQueue, records);
+
+  assert.equal(firstQueue.length, 1);
+  assert.equal(secondQueue.length, 1);
+});
+
+test("Duplicate analysis is read-only and estimates duplicate groups", () => {
+  const records = recordsFromData({
+    nextActions: [
+      action("dup-a", "Same content"),
+      action("dup-b", "Same content"),
+      action("unique", "Unique"),
+    ],
+  }).filter((record) => record.collection === "nextActions");
+  const analysis = analyzeDuplicateRecords(records);
+
+  assert.equal(analysis.totalCount, 3);
+  assert.equal(analysis.uniqueCount, 2);
+  assert.equal(analysis.duplicateCount, 1);
+});
+
+test("Duplicate removal plan is safe and only returns candidates", () => {
+  const records = recordsFromData({
+    nextActions: [
+      action("dup-a", "Same content"),
+      action("dup-b", "Same content"),
+      action("unique", "Unique"),
+    ],
+  }).filter((record) => record.collection === "nextActions");
+  const plan = createDuplicateRemovalPlan(records);
+
+  assert.equal(plan.backupRequired, true);
+  assert.equal(plan.removeCandidates.length, 1);
+  assert.equal(plan.totalCount, 3);
+});
+
+test("Source fingerprint is stable for the same normalized local source", () => {
+  const records = recordsFromData({
+    nextActions: [action("a", "A"), action("b", "B")],
+  });
+
+  assert.equal(fingerprintRecords(records), fingerprintRecords(recordsFromData(dataFromRecords(records))));
 });

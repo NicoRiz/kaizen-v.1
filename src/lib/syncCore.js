@@ -9,6 +9,9 @@ import {
 import { readStorage, writeStorage } from "../utils/storage.js";
 
 const ISO_FALLBACK = "1970-01-01T00:00:00.000Z";
+function defaultLegacyIdFactory(context = {}) {
+  return createStableLegacyId(context.collection, context.item, context.index);
+}
 
 export function createId() {
   if (globalThis.crypto?.randomUUID) {
@@ -183,6 +186,8 @@ export function readDeviceSnapshots(storage = getBrowserStorage()) {
         data,
         deviceId: parsed.deviceId || "",
         keys: parsed.keys || {},
+        recordCount: countDataItems(normalizeLegacyData(data).data),
+        sizeBytes: rawValue?.length || 0,
       });
     }
   } catch (error) {
@@ -199,8 +204,9 @@ export function readLatestDeviceSnapshot(storage = getBrowserStorage()) {
 }
 
 export function getBestLocalRecoveryData(options = {}) {
+  const includeRecoverySources = Boolean(options.includeRecoverySources);
   const timestamp = options.timestamp || nowIso();
-  const idFactory = options.idFactory || createId;
+  const idFactory = options.idFactory || defaultLegacyIdFactory;
   const storage = options.storage || getBrowserStorage();
   const rawLegacy = options.rawLegacy || readLegacyDataFromStorage(storage);
   const normalizedLegacy = normalizeLegacyData(rawLegacy, timestamp, idFactory);
@@ -230,7 +236,7 @@ export function getBestLocalRecoveryData(options = {}) {
     });
   }
 
-  if (backupCount > 0) {
+  if (includeRecoverySources && backupCount > 0) {
     sources.push({
       count: backupCount,
       key: latestBackup.key,
@@ -240,7 +246,7 @@ export function getBestLocalRecoveryData(options = {}) {
     });
   }
 
-  if (snapshotCount > 0) {
+  if (includeRecoverySources && snapshotCount > 0) {
     sources.push({
       count: snapshotCount,
       key: latestSnapshot.key,
@@ -250,7 +256,7 @@ export function getBestLocalRecoveryData(options = {}) {
     });
   }
 
-  if (syncCacheCount > 0) {
+  if (syncCacheCount > 0 && legacyCount === 0) {
     sources.push({
       count: syncCacheCount,
       name: "syncCache",
@@ -330,7 +336,7 @@ export function writeSyncMeta(patch) {
   });
 }
 
-export function normalizeLegacyData(input, timestamp = nowIso(), idFactory = createId) {
+export function normalizeLegacyData(input, timestamp = nowIso(), idFactory = defaultLegacyIdFactory) {
   const data = createEmptyKaizenData();
   const warnings = [];
 
@@ -357,11 +363,15 @@ function normalizeCollectionValue(collection, value, timestamp, idFactory, warni
 
     return value
       .filter((item) => item && typeof item === "object")
-      .map((item) => {
+      .map((item, index) => {
         const record = { ...item };
 
         if (!record.id) {
-          record.id = idFactory();
+          record.id = idFactory({
+            collection: collection.name,
+            index,
+            item: record,
+          });
         }
 
         if (!record.createdAt) {
@@ -546,7 +556,7 @@ export function mergeRecords(localRecords, remoteRecords, options = {}) {
       continue;
     }
 
-    const conflictRecord = createConflictRecord(local, timestamp, idFactory);
+    const conflictRecord = createConflictRecord(local, remote, timestamp, idFactory);
     merged.push(remote, conflictRecord);
     remoteUpserts.push(conflictRecord);
     conflicts.push({
@@ -739,6 +749,26 @@ export function queueFromRecords(records, timestamp = nowIso()) {
   }));
 }
 
+export function mergeQueuedRecords(existingQueue = [], records = [], timestamp = nowIso()) {
+  const byKey = new Map(
+    existingQueue.map((item) => [
+      recordKey(item.record),
+      {
+        ...item,
+        attempts: item.attempts || 0,
+      },
+    ]),
+  );
+
+  for (const item of queueFromRecords(records, timestamp)) {
+    const key = recordKey(item.record);
+    const existing = byKey.get(key);
+    byKey.set(key, existing ? { ...item, attempts: existing.attempts } : item);
+  }
+
+  return [...byKey.values()];
+}
+
 export function serializeRecordForSupabase(record, userId) {
   return {
     user_id: userId,
@@ -764,8 +794,117 @@ export function deserializeRecordFromSupabase(row) {
   };
 }
 
-function createConflictRecord(record, timestamp, idFactory) {
-  const id = `${record.id}__conflict__${idFactory()}`;
+export function fingerprintData(value) {
+  return stableHash(stableSerialize(value));
+}
+
+export function fingerprintRecords(records = []) {
+  return fingerprintData(
+    records
+      .filter((record) => !record.deleted_at)
+      .map((record) => ({
+        collection: record.collection,
+        data: record.data,
+        id: record.id,
+      }))
+      .sort((left, right) =>
+        `${left.collection}:${left.id}`.localeCompare(`${right.collection}:${right.id}`),
+      ),
+  );
+}
+
+export function summarizeDeviceSnapshots(storage = getBrowserStorage()) {
+  return readDeviceSnapshots(storage).map((snapshot) => ({
+    createdAt: snapshot.createdAt,
+    deviceId: snapshot.deviceId,
+    key: snapshot.key,
+    recordCount: snapshot.recordCount,
+    sizeBytes: snapshot.sizeBytes,
+  }));
+}
+
+export function analyzeDuplicateRecords(records = []) {
+  const activeRecords = records.filter((record) => !record.deleted_at);
+  const groups = new Map();
+
+  for (const record of activeRecords) {
+    const identity = duplicateIdentity(record);
+    const group = groups.get(identity) || {
+      collection: record.collection,
+      identity,
+      records: [],
+    };
+    group.records.push(record);
+    groups.set(identity, group);
+  }
+
+  const duplicateGroups = [...groups.values()].filter((group) => group.records.length > 1);
+  const duplicateCount = duplicateGroups.reduce(
+    (count, group) => count + group.records.length - 1,
+    0,
+  );
+
+  return {
+    duplicateCount,
+    groups: duplicateGroups.map((group) => ({
+      collection: group.collection,
+      count: group.records.length,
+      ids: group.records.map((record) => record.id),
+      identity: group.identity,
+    })),
+    totalCount: activeRecords.length,
+    uniqueCount: activeRecords.length - duplicateCount,
+  };
+}
+
+export function createDuplicateRemovalPlan(records = []) {
+  const activeRecords = records.filter((record) => !record.deleted_at);
+  const groups = new Map();
+
+  for (const record of activeRecords) {
+    const identity = duplicateIdentity(record);
+    const group = groups.get(identity) || [];
+    group.push(record);
+    groups.set(identity, group);
+  }
+
+  const removeCandidates = [];
+
+  for (const group of groups.values()) {
+    if (group.length < 2) {
+      continue;
+    }
+
+    const sorted = [...group].sort((left, right) =>
+      compareDates(right.updated_at, left.updated_at),
+    );
+    removeCandidates.push(
+      ...sorted.slice(1).map((record) => ({
+        collection: record.collection,
+        id: record.id,
+        identity: duplicateIdentity(record),
+        updated_at: record.updated_at,
+      })),
+    );
+  }
+
+  const analysis = analyzeDuplicateRecords(records);
+
+  return {
+    ...analysis,
+    backupRequired: true,
+    removeCandidates,
+  };
+}
+
+function createConflictRecord(record, conflictWith, timestamp, idFactory) {
+  const conflictFingerprint = fingerprintData({
+    collection: record.collection,
+    local: canonicalConflictData(record.data),
+    remote: canonicalConflictData(conflictWith?.data),
+    sourceId: record.id,
+  });
+  const id = `${record.id}__conflict__${conflictFingerprint}`;
   const data = cloneValue(record.data);
 
   if (data && typeof data === "object" && !Array.isArray(data)) {
@@ -912,4 +1051,92 @@ function findLatestBackupWithData(backups) {
     backups[0] ||
     null
   );
+}
+
+function createStableLegacyId(collection, item, index) {
+  return `legacy-${collection}-${fingerprintData({
+    index,
+    item: canonicalLegacyItem(item),
+  })}`;
+}
+
+function canonicalLegacyItem(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return item;
+  }
+
+  const { id, updatedAt, ...rest } = item;
+  return rest;
+}
+
+function canonicalConflictData(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return data;
+  }
+
+  const {
+    conflictPreservedAt,
+    id,
+    updatedAt,
+    version,
+    ...rest
+  } = data;
+  return rest;
+}
+
+function duplicateIdentity(record) {
+  const data = record.data && typeof record.data === "object" ? record.data : {};
+  const originalId =
+    data.conflictOf ||
+    data.legacyTaskId ||
+    data.sourceInboxItemId ||
+    (String(record.id || "").includes("__conflict__") ? baseConflictId(record.id) : "");
+  const contentFingerprint = fingerprintData(canonicalDuplicateData(data));
+  return `${record.collection}:${originalId}:${contentFingerprint}`;
+}
+
+function baseConflictId(id) {
+  return String(id || "").split("__conflict__")[0];
+}
+
+function canonicalDuplicateData(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return data;
+  }
+
+  const {
+    conflictPreservedAt,
+    id,
+    order,
+    updatedAt,
+    version,
+    ...rest
+  } = data;
+  return rest;
+}
+
+function stableSerialize(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
+  }
+
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
+    .join(",")}}`;
+}
+
+function stableHash(value) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(36);
 }

@@ -3,6 +3,7 @@ import { COLLECTIONS, MIGRATION_VERSION } from "../lib/kaizenData.js";
 import { supabase, supabaseConfig } from "../lib/supabaseClient.js";
 import {
   applyChangedRecords,
+  analyzeDuplicateRecords,
   countDataItems,
   countRecords,
   createDeviceSnapshot,
@@ -10,12 +11,13 @@ import {
   dataFromRecords,
   deserializeRecordFromSupabase,
   diffCollectionRecords,
+  fingerprintRecords,
   getBestLocalRecoveryData,
   getOrCreateDeviceId,
   mergeBootstrapRecords,
   mergeRecords,
+  mergeQueuedRecords,
   normalizeLegacyData,
-  queueFromRecords,
   readLegacyData,
   readDeviceSnapshots,
   readLatestLegacyBackup,
@@ -25,6 +27,7 @@ import {
   readSyncQueue,
   recordsFromData,
   serializeRecordForSupabase,
+  summarizeDeviceSnapshots,
   writeLegacyData,
   writeSyncCache,
   writeSyncMeta,
@@ -64,6 +67,7 @@ export function useKaizenSync({ data, onReplaceData }) {
   const [diagnostics, setDiagnostics] = useState(() => {
     const recovery = getBestLocalRecoveryData();
     const meta = readSyncMeta();
+    const snapshotSummaries = summarizeDeviceSnapshots();
 
     return {
       backupCount: recovery.backupCount,
@@ -75,6 +79,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       localCount: countDataItems(recovery.data),
       queueCount: readSyncQueue().length,
       remoteCount: null,
+      snapshotSummaries,
       snapshotCount: recovery.snapshotCount,
       snapshotKey: recovery.snapshotKey || deviceContext.initialSnapshotKey,
       source: recovery.source,
@@ -297,7 +302,7 @@ export function useKaizenSync({ data, onReplaceData }) {
         return Promise.resolve(true);
       }
 
-      queueRef.current = [...queueRef.current, ...queueFromRecords(records)];
+      queueRef.current = mergeQueuedRecords(queueRef.current, records);
       writeSyncQueue(queueRef.current);
       setDiagnostics((current) => ({
         ...current,
@@ -336,10 +341,20 @@ export function useKaizenSync({ data, onReplaceData }) {
       const timestamp = new Date().toISOString();
       const snapshotKey = createDeviceSnapshot({ deviceId, timestamp });
       const rawLocal = readLegacyData();
-      const recovery = getBestLocalRecoveryData({ rawLegacy: rawLocal });
-      const backupKey = createLegacyBackup(rawLocal, timestamp);
+      const recovery = getBestLocalRecoveryData({
+        includeRecoverySources: false,
+        rawLegacy: rawLocal,
+      });
       const localRecords = recovery.records;
       const localCount = countDataItems(recovery.data);
+      const sourceFingerprint = fingerprintRecords(localRecords);
+      const previousDeviceMigration = readSyncMeta().deviceMigrations?.[deviceId] || {};
+      const sourceAlreadyImported =
+        previousDeviceMigration.deviceMigrationCompletedAt &&
+        previousDeviceMigration.sourceFingerprint === sourceFingerprint;
+      const backupKey = sourceAlreadyImported
+        ? previousDeviceMigration.legacyBackupKey || ""
+        : createLegacyBackup(rawLocal, timestamp);
       const deviceMigrationId = `${deviceId}:${timestamp}`;
 
       if (localCount > 0) {
@@ -364,6 +379,7 @@ export function useKaizenSync({ data, onReplaceData }) {
         legacyCount: recovery.legacyCount,
         localCount,
         queueCount: queueRef.current.length,
+        snapshotSummaries: summarizeDeviceSnapshots(),
         snapshotCount: recovery.snapshotCount,
         snapshotKey,
         source: recovery.source,
@@ -375,6 +391,8 @@ export function useKaizenSync({ data, onReplaceData }) {
         legacyBackupKey: backupKey,
         localRecordCount: localCount,
         recoverySource: recovery.source,
+        sourceAlreadyImported,
+        sourceFingerprint,
       });
 
       try {
@@ -408,6 +426,8 @@ export function useKaizenSync({ data, onReplaceData }) {
           remoteRecordCount: remoteCount,
           recoveredRecordCount: mergedCount,
           recoverySource: merged.source || recovery.source,
+          sourceAlreadyImported,
+          sourceFingerprint,
           warnings: recovery.warnings,
         };
         setMigrationInfo((current) => ({ ...current, ...nextMeta }));
@@ -418,6 +438,7 @@ export function useKaizenSync({ data, onReplaceData }) {
           localCount,
           queueCount: queueRef.current.length,
           remoteCount,
+          snapshotSummaries: summarizeDeviceSnapshots(),
           snapshotKey,
           source: merged.source || recovery.source,
         }));
@@ -432,6 +453,8 @@ export function useKaizenSync({ data, onReplaceData }) {
           remoteRecordCount: remoteCount,
           recoveredRecordCount: mergedCount,
           recoverySource: merged.source || recovery.source,
+          sourceAlreadyImported,
+          sourceFingerprint,
           warnings: recovery.warnings,
         });
 
@@ -447,6 +470,7 @@ export function useKaizenSync({ data, onReplaceData }) {
             localRecordCount: localCount,
             remoteRecordCount: remoteCount,
             recoveredRecordCount: mergedCount,
+            sourceFingerprint,
           });
           setStatus(STATUS.synced);
         }
@@ -456,7 +480,7 @@ export function useKaizenSync({ data, onReplaceData }) {
         recordsRef.current = localRecords;
         writeSyncCache(localRecords);
         if (countRecords(localRecords) > 0) {
-          queueRef.current = [...queueRef.current, ...queueFromRecords(localRecords)];
+          queueRef.current = mergeQueuedRecords(queueRef.current, localRecords);
           writeSyncQueue(queueRef.current);
         }
         setDiagnostics((current) => ({
@@ -475,6 +499,8 @@ export function useKaizenSync({ data, onReplaceData }) {
           legacyBackupKey: backupKey,
           localRecordCount: localCount,
           recoverySource: recovery.source,
+          sourceAlreadyImported,
+          sourceFingerprint,
         });
         setStatus(navigator.onLine ? STATUS.error : STATUS.offline);
         setMessage("Uso i dati locali. La sincronizzazione riprovera' appena possibile.");
@@ -612,9 +638,13 @@ export function useKaizenSync({ data, onReplaceData }) {
     const snapshotKey = createDeviceSnapshot({ deviceId, timestamp });
     const rawLocal = readLegacyData();
     const backupKey = createLegacyBackup(rawLocal, timestamp);
-    const recovery = getBestLocalRecoveryData({ rawLegacy: rawLocal });
+    const recovery = getBestLocalRecoveryData({
+      includeRecoverySources: false,
+      rawLegacy: rawLocal,
+    });
     const localRecords = recovery.records;
     const localCount = countDataItems(recovery.data);
+    const sourceFingerprint = fingerprintRecords(localRecords);
 
     if (localCount > 0) {
       writeLegacyData(recovery.data);
@@ -631,6 +661,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       localRecordCount: localCount,
       manualImport: true,
       recoverySource: recovery.source,
+      sourceFingerprint,
     });
     setStatus(navigator.onLine ? STATUS.syncing : STATUS.offline);
 
@@ -670,6 +701,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       localCount,
       queueCount: queueRef.current.length,
       remoteCount,
+      snapshotSummaries: summarizeDeviceSnapshots(),
       snapshotCount: recovery.snapshotCount,
       snapshotKey,
       source: merged.source || recovery.source,
@@ -686,6 +718,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       remoteRecordCount: remoteCount,
       recoveredRecordCount: mergedCount,
       recoverySource: merged.source || recovery.source,
+      sourceFingerprint,
       warnings: recovery.warnings,
     });
 
@@ -702,6 +735,7 @@ export function useKaizenSync({ data, onReplaceData }) {
         localRecordCount: localCount,
         remoteRecordCount: remoteCount,
         recoveredRecordCount: mergedCount,
+        sourceFingerprint,
       });
     }
 
@@ -720,6 +754,28 @@ export function useKaizenSync({ data, onReplaceData }) {
       snapshotKey,
       totalCount: mergedCount,
     };
+  }
+
+  async function analyzeAccountDuplicates() {
+    if (!canUseCloud) {
+      const localAnalysis = analyzeDuplicateRecords(recordsRef.current);
+      setDiagnostics((current) => ({
+        ...current,
+        duplicateAnalysis: localAnalysis,
+      }));
+      return localAnalysis;
+    }
+
+    const remoteRecords = await fetchRemoteRecords();
+    const analysis = analyzeDuplicateRecords(remoteRecords);
+
+    setDiagnostics((current) => ({
+      ...current,
+      duplicateAnalysis: analysis,
+      remoteCount: countRecords(remoteRecords),
+    }));
+
+    return analysis;
   }
 
   async function signOut() {
@@ -741,6 +797,9 @@ export function useKaizenSync({ data, onReplaceData }) {
 
   function exportBackup() {
     const recovery = getBestLocalRecoveryData();
+    const recoveryWithBackups = getBestLocalRecoveryData({
+      includeRecoverySources: true,
+    });
     const latestBackup = readLatestLegacyBackup();
     const latestDeviceSnapshot = readLatestDeviceSnapshot();
     const deviceSnapshots = readDeviceSnapshots();
@@ -756,6 +815,15 @@ export function useKaizenSync({ data, onReplaceData }) {
         snapshotCount: recovery.snapshotCount,
         snapshotKey: recovery.snapshotKey,
         source: recovery.source,
+      },
+      recoveryWithBackups: {
+        backupCount: recoveryWithBackups.backupCount,
+        backupKey: recoveryWithBackups.backupKey,
+        cacheCount: recoveryWithBackups.syncCacheCount,
+        legacyCount: recoveryWithBackups.legacyCount,
+        snapshotCount: recoveryWithBackups.snapshotCount,
+        snapshotKey: recoveryWithBackups.snapshotKey,
+        source: recoveryWithBackups.source,
       },
       syncMeta: readSyncMeta(),
       syncCache: readSyncCache(),
@@ -776,6 +844,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       deviceSnapshots,
       data: recovery.data,
       normalizedRecords: recovery.records,
+      recoveryRecords: recoveryWithBackups.records,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
@@ -808,6 +877,7 @@ export function useKaizenSync({ data, onReplaceData }) {
     () => ({
       authError,
       authReady,
+      analyzeAccountDuplicates,
       canUseCloud,
       config: supabaseConfig,
       exportBackup,
