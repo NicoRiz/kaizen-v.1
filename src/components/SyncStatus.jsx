@@ -15,6 +15,7 @@ export default function SyncStatus({ sync }) {
   const [importMessage, setImportMessage] = useState("");
   const [isImportingLocal, setIsImportingLocal] = useState(false);
   const [isAnalyzingDuplicates, setIsAnalyzingDuplicates] = useState(false);
+  const [isReplacingLocal, setIsReplacingLocal] = useState(false);
   const fileInputRef = useRef(null);
   const label = STATUS_LABELS[sync.status] || "Sync";
   const localRecordCount =
@@ -27,7 +28,10 @@ export default function SyncStatus({ sync }) {
       ? "In corso"
       : "In attesa";
   const canImportLocal =
-    sync.isAuthenticated && localRecordCount > 0 && typeof sync.importLocalDataIntoAccount === "function";
+    sync.isAuthenticated &&
+    !sync.ignoreLocalForCloudImport &&
+    localRecordCount > 0 &&
+    typeof sync.importLocalDataIntoAccount === "function";
 
   async function handleImport(event) {
     const file = event.target.files?.[0];
@@ -80,6 +84,23 @@ export default function SyncStatus({ sync }) {
       setImportMessage("Analisi duplicati non riuscita. Nessun dato e' stato modificato.");
     } finally {
       setIsAnalyzingDuplicates(false);
+    }
+  }
+
+  async function handleReplaceLocalWithAccount() {
+    setIsReplacingLocal(true);
+    setImportMessage("");
+
+    try {
+      const result = await sync.replaceLocalDataWithAccount();
+      setImportMessage(
+        `Dati locali sostituiti con account: ${result.remoteCount} record. Snapshot creato: ${result.snapshotKey ? "si" : "no"}.`,
+      );
+    } catch (error) {
+      console.error("Kaizen replace local error", error);
+      setImportMessage("Sostituzione locale non riuscita. Nessun dato remoto e' stato cancellato.");
+    } finally {
+      setIsReplacingLocal(false);
     }
   }
 
@@ -199,6 +220,38 @@ export default function SyncStatus({ sync }) {
                 </button>
               </div>
             )}
+
+            <div className="sync-import-box">
+              <p>
+                <strong>Import locale da questo dispositivo</strong>
+                <span>
+                  {sync.ignoreLocalForCloudImport
+                    ? "Disattivato: questo device non carichera' dati locali nel cloud."
+                    : "Attivo solo tramite pulsante esplicito, mai al bootstrap."}
+                </span>
+              </p>
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  sync.setLocalCloudImportDisabled(!sync.ignoreLocalForCloudImport)
+                }
+                type="button"
+              >
+                {sync.ignoreLocalForCloudImport
+                  ? "Riattiva import locale"
+                  : "Disattiva import automatico dati locali da questo dispositivo"}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={isReplacingLocal || !sync.isAuthenticated}
+                onClick={handleReplaceLocalWithAccount}
+                type="button"
+              >
+                {isReplacingLocal
+                  ? "Sostituzione..."
+                  : "Sostituisci dati locali con account"}
+              </button>
+            </div>
 
             <div className="sync-import-box">
               <p>

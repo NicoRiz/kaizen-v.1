@@ -6,6 +6,7 @@ import {
   countRecords,
   createDuplicateRemovalPlan,
   createDeviceSnapshot,
+  createRemoteUserResetPlan,
   dataFromRecords,
   diffCollectionRecords,
   fingerprintRecords,
@@ -15,6 +16,7 @@ import {
   mergeRecords,
   mergeQueuedRecords,
   normalizeLegacyData,
+  planBootstrapSync,
   queueFromRecords,
   readDeviceSnapshots,
   recordsFromData,
@@ -690,4 +692,100 @@ test("Source fingerprint is stable for the same normalized local source", () => 
   });
 
   assert.equal(fingerprintRecords(records), fingerprintRecords(recordsFromData(dataFromRecords(records))));
+});
+
+test("Reset A: remote dirty rows are planned for one user only", () => {
+  const plan = createRemoteUserResetPlan({
+    userId: "user-target",
+    recordRows: [
+      { user_id: "user-target", collection: "nextActions", id: "dirty-1" },
+      { user_id: "user-target", collection: "nextActions", id: "dirty-2" },
+      { user_id: "other-user", collection: "nextActions", id: "keep" },
+    ],
+    syncStateRows: [
+      { user_id: "user-target", id: "state-target" },
+      { user_id: "other-user", id: "state-other" },
+    ],
+  });
+
+  assert.equal(plan.deleteCounts.kaizen_records, 2);
+  assert.equal(plan.deleteCounts.kaizen_sync_state, 1);
+  assert.equal(plan.remainingRecords.length, 1);
+  assert.equal(plan.remainingSyncState.length, 1);
+});
+
+test("Reset B: PC local dirty data cannot repopulate empty remote when local import is disabled", () => {
+  const pcLocal = recordsFromData({
+    nextActions: Array.from({ length: 162 }, (_, index) =>
+      action(`pc-${index}`, `PC dirty ${index}`),
+    ),
+  });
+  const plan = planBootstrapSync({
+    ignoreLocalForCloudImport: true,
+    localRecords: pcLocal,
+    recoverySource: "legacy",
+    remoteRecords: [],
+  });
+
+  assert.equal(plan.localImportIgnored, true);
+  assert.equal(plan.shouldUploadLocal, false);
+  assert.equal(countRecords([]), 0);
+});
+
+test("Reset C: explicit phone import uploads exactly the unique phone dataset into empty remote", () => {
+  const phoneLocal = recordsFromData({
+    nextActions: Array.from({ length: 50 }, (_, index) =>
+      action(`phone-${index}`, `Phone ${index}`),
+    ),
+  });
+  const imported = mergeBootstrapRecords({
+    localRecords: phoneLocal,
+    recoverySource: "legacy",
+    remoteRecords: [],
+  });
+
+  assert.equal(imported.mergedCount, 50);
+  assert.equal(countRecords(imported.remoteUpserts), 50);
+});
+
+test("Reset D: phone reopening five times after explicit import keeps remote at 50", () => {
+  const phoneLocal = recordsFromData({
+    nextActions: Array.from({ length: 50 }, (_, index) =>
+      action(`phone-${index}`, `Phone ${index}`),
+    ),
+  });
+  let remote = mergeBootstrapRecords({
+    localRecords: phoneLocal,
+    recoverySource: "legacy",
+    remoteRecords: [],
+  }).mergedRecords;
+
+  for (let index = 0; index < 5; index += 1) {
+    const plan = planBootstrapSync({
+      localRecords: phoneLocal,
+      recoverySource: "legacy",
+      remoteRecords: remote,
+    });
+    remote = plan.mergedRecords;
+    assert.equal(countRecords(remote), 50);
+    assert.equal(plan.shouldUploadLocal, false);
+  }
+});
+
+test("Reset E: replacing dirty PC local with account makes PC 50 and remote remains 50", () => {
+  const remote = recordsFromData({
+    nextActions: Array.from({ length: 50 }, (_, index) =>
+      action(`phone-${index}`, `Phone ${index}`),
+    ),
+  });
+  const pcDirty = recordsFromData({
+    nextActions: Array.from({ length: 162 }, (_, index) =>
+      action(`pc-${index}`, `PC dirty ${index}`),
+    ),
+  });
+  const replacedPcData = dataFromRecords(remote);
+
+  assert.equal(countRecords(pcDirty), 162);
+  assert.equal(replacedPcData.nextActions.length, 50);
+  assert.equal(countRecords(remote), 50);
 });

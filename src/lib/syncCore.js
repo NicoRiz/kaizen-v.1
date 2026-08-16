@@ -676,6 +676,56 @@ export function mergeBootstrapRecords(options = {}) {
   };
 }
 
+export function planBootstrapSync(options = {}) {
+  const localRecords = options.localRecords || [];
+  const remoteRecords = options.remoteRecords || [];
+  const localCount = countRecords(localRecords);
+  const remoteCount = countRecords(remoteRecords);
+  const sourceFingerprint = fingerprintRecords(localRecords);
+  const merged = mergeBootstrapRecords(options);
+  const shouldReplaceLocal = localCount === 0 && remoteCount > 0;
+  const localImportIgnored = localCount > 0 && Boolean(options.ignoreLocalForCloudImport);
+  const requiresExplicitImport = localCount > 0 && !localImportIgnored;
+
+  return {
+    ...merged,
+    localImportIgnored,
+    requiresExplicitImport,
+    shouldReplaceLocal,
+    shouldUploadLocal: false,
+    sourceFingerprint,
+  };
+}
+
+export function createRemoteUserResetPlan(options = {}) {
+  const userId = options.userId;
+  const recordRows = options.recordRows || [];
+  const syncStateRows = options.syncStateRows || [];
+
+  if (!userId) {
+    throw new Error("Reset remoto bloccato: user_id mancante.");
+  }
+
+  const kaizenRecords = recordRows.filter((row) => row.user_id === userId);
+  const syncState = syncStateRows.filter((row) => row.user_id === userId);
+
+  return {
+    backup: {
+      createdAt: nowIso(),
+      kaizen_records: kaizenRecords,
+      kaizen_sync_state: syncState,
+      user_id: userId,
+    },
+    deleteCounts: {
+      kaizen_records: kaizenRecords.length,
+      kaizen_sync_state: syncState.length,
+    },
+    remainingRecords: recordRows.filter((row) => row.user_id !== userId),
+    remainingSyncState: syncStateRows.filter((row) => row.user_id !== userId),
+    user_id: userId,
+  };
+}
+
 export function validateMigrationResult(localCount, mergedCount) {
   if (localCount > 0 && mergedCount === 0) {
     throw new Error(
