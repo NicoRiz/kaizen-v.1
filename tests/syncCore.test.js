@@ -4,9 +4,12 @@ import {
   applyChangedRecords,
   dataFromRecords,
   diffCollectionRecords,
+  getBestLocalRecoveryData,
+  mergeBootstrapRecords,
   mergeRecords,
   normalizeLegacyData,
   recordsFromData,
+  validateMigrationResult,
 } from "../src/lib/syncCore.js";
 
 function action(id, title, updatedAt = "2026-08-15T10:00:00.000Z") {
@@ -18,6 +21,25 @@ function action(id, title, updatedAt = "2026-08-15T10:00:00.000Z") {
     createdAt: "2026-08-15T09:00:00.000Z",
     updatedAt,
     completedAt: null,
+  };
+}
+
+function makeStorage(entries) {
+  const map = new Map(Object.entries(entries));
+
+  return {
+    get length() {
+      return map.size;
+    },
+    getItem(key) {
+      return map.has(key) ? map.get(key) : null;
+    },
+    key(index) {
+      return [...map.keys()][index] || null;
+    },
+    setItem(key, value) {
+      map.set(key, value);
+    },
   };
 }
 
@@ -143,4 +165,117 @@ test("Legacy records without ids receive stable ids before migration upload", ()
     normalized.data.nextActions[0].updatedAt,
     "2026-08-15T09:00:00.000Z",
   );
+});
+
+test("Test 1: 20 local legacy records and empty remote keep 20 visible records and queue uploads", () => {
+  const localRecords = recordsFromData({
+    nextActions: Array.from({ length: 20 }, (_, index) =>
+      action(`local-${index}`, `Legacy ${index}`),
+    ),
+  });
+  const result = mergeBootstrapRecords({
+    localRecords,
+    recoverySource: "legacy",
+    remoteRecords: [],
+  });
+  const data = dataFromRecords(result.mergedRecords);
+
+  assert.equal(data.nextActions.length, 20);
+  assert.equal(result.localCount, 20);
+  assert.equal(result.remoteCount, 0);
+  assert.equal(result.mergedCount, 20);
+  assert.equal(result.remoteUpserts.length, localRecords.length);
+});
+
+test("Test 2: sign-in/bootstrap with local legacy and empty remote does not zero local state", () => {
+  const beforeLoginRecords = recordsFromData({
+    inboxItems: [action("inbox-a", "Prima del login")],
+    projects: [action("project-a", "Progetto prima del login")],
+  });
+  const result = mergeBootstrapRecords({
+    localRecords: beforeLoginRecords,
+    recoverySource: "legacy",
+    remoteRecords: [],
+  });
+  const afterLoginData = dataFromRecords(result.mergedRecords);
+
+  assert.equal(afterLoginData.inboxItems.length, 1);
+  assert.equal(afterLoginData.projects.length, 1);
+  assert.equal(result.remoteUpserts.length, beforeLoginRecords.length);
+});
+
+test("Test 3: empty legacy keys recover from the newest valid legacy backup", () => {
+  const storage = makeStorage({
+    "kaizen_legacy_backup_2026-08-15T09-00-00-000Z": JSON.stringify({
+      createdAt: "2026-08-15T09:00:00.000Z",
+      data: {
+        nextActions: [action("old", "Old backup")],
+      },
+    }),
+    "kaizen_legacy_backup_2026-08-15T10-00-00-000Z": JSON.stringify({
+      createdAt: "2026-08-15T10:00:00.000Z",
+      data: {
+        nextActions: [],
+      },
+    }),
+    "kaizen_legacy_backup_2026-08-15T11-00-00-000Z": JSON.stringify({
+      createdAt: "2026-08-15T11:00:00.000Z",
+      data: {
+        nextActions: [action("new", "Valid backup")],
+      },
+    }),
+  });
+
+  const recovery = getBestLocalRecoveryData({
+    rawLegacy: { nextActions: [] },
+    storage,
+  });
+
+  assert.equal(recovery.legacyCount, 0);
+  assert.equal(recovery.backupCount, 1);
+  assert.equal(recovery.data.nextActions[0].title, "Valid backup");
+  assert.equal(recovery.source, "legacyBackup");
+});
+
+test("Test 4: empty remote and empty sync cache cannot override full legacy", () => {
+  const recovery = getBestLocalRecoveryData({
+    rawLegacy: {
+      nextActions: [action("legacy-a", "Legacy survives")],
+    },
+    syncCacheRecords: [],
+  });
+  const result = mergeBootstrapRecords({
+    localRecords: recovery.records,
+    recoverySource: recovery.source,
+    remoteRecords: [],
+  });
+  const data = dataFromRecords(result.mergedRecords);
+
+  assert.equal(recovery.legacyCount, 1);
+  assert.equal(recovery.syncCacheCount, 0);
+  assert.equal(data.nextActions[0].title, "Legacy survives");
+});
+
+test("Test 5: refresh after login can recover visible data from sync cache when legacy is empty", () => {
+  const cachedRecords = recordsFromData({
+    nextActions: [action("cached-a", "Cached after login")],
+  });
+  const recovery = getBestLocalRecoveryData({
+    rawLegacy: { nextActions: [] },
+    syncCacheRecords: cachedRecords,
+  });
+  const data = dataFromRecords(recovery.records);
+
+  assert.equal(recovery.legacyCount, 0);
+  assert.equal(recovery.syncCacheCount, 1);
+  assert.equal(data.nextActions[0].title, "Cached after login");
+});
+
+test("Test 6: partial migration failure is rejected when local data would become empty", () => {
+  assert.throws(
+    () => validateMigrationResult(1, 0),
+    /Migrazione bloccata/,
+  );
+  assert.doesNotThrow(() => validateMigrationResult(1, 1));
+  assert.doesNotThrow(() => validateMigrationResult(0, 0));
 });

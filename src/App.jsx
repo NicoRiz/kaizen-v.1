@@ -9,9 +9,8 @@ import { useKaizenSync } from "./hooks/useKaizenSync.js";
 import { COLLECTIONS, STORAGE_KEYS } from "./lib/kaizenData.js";
 import {
   createId,
-  normalizeLegacyData,
+  getBestLocalRecoveryData,
   nowIso,
-  readLegacyData,
 } from "./lib/syncCore.js";
 import { dateKey } from "./utils/date.js";
 import { readStorage, writeStorage } from "./utils/storage.js";
@@ -66,7 +65,7 @@ function normalizeLegacyTask(task, index) {
 }
 
 function initialKaizenData() {
-  return normalizeLegacyData(readLegacyData()).data;
+  return getBestLocalRecoveryData().data;
 }
 
 export default function App() {

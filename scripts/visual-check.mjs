@@ -151,6 +151,8 @@ try {
 
   const desktop = await capture(page, { width: 1280, height: 900, mobile: false }, "desktop");
   const mobile = await capture(page, { width: 390, height: 844, mobile: true }, "mobile");
+  assertVisualResult(desktop, "desktop");
+  assertVisualResult(mobile, "mobile");
 
   await writeFile(
     join(OUT_DIR, "visual-check-results.json"),
@@ -167,4 +169,24 @@ try {
   ]).catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 300));
   await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+}
+
+function assertVisualResult(result, name) {
+  if (!result.text.includes("KAIZEN")) {
+    throw new Error(`${name}: KAIZEN shell not rendered`);
+  }
+
+  if (result.overflowX) {
+    throw new Error(`${name}: horizontal overflow detected`);
+  }
+
+  for (const item of ["GTD", "Home", "Note"]) {
+    if (!result.navItems.includes(item)) {
+      throw new Error(`${name}: missing nav item ${item}`);
+    }
+  }
+
+  if (!result.syncStatus) {
+    throw new Error(`${name}: missing sync status`);
+  }
 }

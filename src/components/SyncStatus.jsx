@@ -93,6 +93,36 @@ export default function SyncStatus({ sync }) {
               </p>
             </div>
 
+            <div className="sync-diagnostics">
+              <p className="eyebrow">Diagnostica</p>
+              <dl>
+                <div>
+                  <dt>Record legacy trovati</dt>
+                  <dd>{sync.diagnostics?.legacyCount ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>Record cache</dt>
+                  <dd>{sync.diagnostics?.cacheCount ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>Record remoti</dt>
+                  <dd>{sync.diagnostics?.remoteCount ?? "n/d"}</dd>
+                </div>
+                <div>
+                  <dt>Queue pendente</dt>
+                  <dd>{sync.diagnostics?.queueCount ?? sync.pendingCount ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>Fonte recovery</dt>
+                  <dd>{sync.diagnostics?.source || "n/d"}</dd>
+                </div>
+                <div>
+                  <dt>Ultimo backup legacy</dt>
+                  <dd>{sync.diagnostics?.backupKey ? "presente" : "assente"}</dd>
+                </div>
+              </dl>
+            </div>
+
             {sync.message && <p className="form-error">{sync.message}</p>}
             {importMessage && <p className="empty-state">{importMessage}</p>}
 

@@ -160,6 +160,45 @@ textarea:focus-visible {
   line-height: 1.35;
 }
 
+.sync-diagnostics {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.sync-diagnostics dl {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin: 0;
+}
+
+.sync-diagnostics div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #ece3dc;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fffdfa;
+}
+
+.sync-diagnostics dt,
+.sync-diagnostics dd {
+  margin: 0;
+  color: #6f6260;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.sync-diagnostics dd {
+  flex: 0 0 auto;
+  color: #741b34;
+  text-align: right;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

@@ -10,3 +10,5 @@ pnpm-debug.log*
 yarn-debug.log*
 vite-dev*.log
 vite-preview*.log
+visual-*.png
+visual-check-results.json

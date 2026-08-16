@@ -3,14 +3,19 @@ import { COLLECTIONS, MIGRATION_VERSION } from "../lib/kaizenData.js";
 import { supabase, supabaseConfig } from "../lib/supabaseClient.js";
 import {
   applyChangedRecords,
+  countDataItems,
+  countRecords,
   createLegacyBackup,
   dataFromRecords,
   deserializeRecordFromSupabase,
   diffCollectionRecords,
+  getBestLocalRecoveryData,
+  mergeBootstrapRecords,
   mergeRecords,
   normalizeLegacyData,
   queueFromRecords,
   readLegacyData,
+  readLatestLegacyBackup,
   readSyncCache,
   readSyncMeta,
   readSyncQueue,
@@ -44,6 +49,19 @@ export function useKaizenSync({ data, onReplaceData }) {
     () => readSyncMeta().lastSuccessfulSyncAt || "",
   );
   const [migrationInfo, setMigrationInfo] = useState(() => readSyncMeta());
+  const [diagnostics, setDiagnostics] = useState(() => {
+    const recovery = getBestLocalRecoveryData();
+
+    return {
+      backupCount: recovery.backupCount,
+      backupKey: recovery.backupKey,
+      cacheCount: recovery.syncCacheCount,
+      legacyCount: recovery.legacyCount,
+      queueCount: readSyncQueue().length,
+      remoteCount: null,
+      source: recovery.source,
+    };
+  });
   const [authError, setAuthError] = useState("");
   const recordsRef = useRef(readSyncCache().records || []);
   const queueRef = useRef(readSyncQueue());
@@ -128,6 +146,10 @@ export function useKaizenSync({ data, onReplaceData }) {
 
       if (queue.length === 0) {
         setStatus(STATUS.synced);
+        setDiagnostics((current) => ({
+          ...current,
+          queueCount: 0,
+        }));
         return true;
       }
 
@@ -146,6 +168,7 @@ export function useKaizenSync({ data, onReplaceData }) {
         const pendingRecords = queue.map((item) => item.record);
         const remoteRecords = (remoteRows || []).map(deserializeRecordFromSupabase);
         const merged = mergeRecords(pendingRecords, remoteRecords);
+        const remoteCount = countRecords(remoteRecords);
         const rows = merged.remoteUpserts.map((record) =>
           serializeRecordForSupabase(record, user.id),
         );
@@ -164,6 +187,12 @@ export function useKaizenSync({ data, onReplaceData }) {
         replaceFromRecords(nextRecords);
         queueRef.current = [];
         writeSyncQueue([]);
+        setDiagnostics((current) => ({
+          ...current,
+          cacheCount: countRecords(nextRecords),
+          queueCount: 0,
+          remoteCount,
+        }));
         const timestamp = new Date().toISOString();
         const currentMeta = readSyncMeta();
         const migrationCompletionPatch = currentMeta.migrationCompletedAt
@@ -215,6 +244,10 @@ export function useKaizenSync({ data, onReplaceData }) {
 
       queueRef.current = [...queueRef.current, ...queueFromRecords(records)];
       writeSyncQueue(queueRef.current);
+      setDiagnostics((current) => ({
+        ...current,
+        queueCount: queueRef.current.length,
+      }));
       flushQueue();
     },
     [flushQueue],
@@ -246,9 +279,28 @@ export function useKaizenSync({ data, onReplaceData }) {
       setStatus(navigator.onLine ? STATUS.syncing : STATUS.offline);
 
       const rawLocal = readLegacyData();
+      const recovery = getBestLocalRecoveryData({ rawLegacy: rawLocal });
       const backupKey = createLegacyBackup(rawLocal);
-      const normalized = normalizeLegacyData(rawLocal);
-      writeLegacyData(normalized.data);
+      const localRecords = recovery.records;
+      const localCount = countDataItems(recovery.data);
+
+      if (localCount > 0) {
+        writeLegacyData(recovery.data);
+        onReplaceData(recovery.data);
+        recordsRef.current = localRecords;
+        writeSyncCache(localRecords);
+      }
+
+      setDiagnostics((current) => ({
+        ...current,
+        backupCount: recovery.backupCount,
+        backupKey: recovery.backupKey || backupKey,
+        cacheCount: recovery.syncCacheCount,
+        legacyCount: recovery.legacyCount,
+        localCount,
+        queueCount: queueRef.current.length,
+        source: recovery.source,
+      }));
 
       try {
         const { data: remoteRows, error } = await supabase
@@ -260,9 +312,15 @@ export function useKaizenSync({ data, onReplaceData }) {
           throw error;
         }
 
-        const localRecords = recordsFromData(normalized.data);
         const remoteRecords = (remoteRows || []).map(deserializeRecordFromSupabase);
-        const merged = mergeRecords(localRecords, remoteRecords);
+        const merged = mergeBootstrapRecords({
+          localRecords,
+          recoverySource: recovery.source,
+          remoteRecords,
+          warnings: recovery.warnings,
+        });
+        const remoteCount = merged.remoteCount;
+        const mergedCount = merged.mergedCount;
 
         if (cancelled) {
           return;
@@ -277,10 +335,22 @@ export function useKaizenSync({ data, onReplaceData }) {
           lastSuccessfulSyncAt,
           legacyBackupKey: backupKey,
           conflictCount: merged.conflicts.length,
-          warnings: normalized.warnings,
+          localRecordCount: localCount,
+          remoteRecordCount: remoteCount,
+          recoveredRecordCount: mergedCount,
+          recoverySource: merged.source || recovery.source,
+          warnings: recovery.warnings,
         };
         setMigrationInfo((current) => ({ ...current, ...nextMeta }));
         writeSyncMeta(nextMeta);
+        setDiagnostics((current) => ({
+          ...current,
+          cacheCount: mergedCount,
+          localCount,
+          queueCount: queueRef.current.length,
+          remoteCount,
+          source: merged.source || recovery.source,
+        }));
 
         if (merged.remoteUpserts.length > 0) {
           enqueueRecords(merged.remoteUpserts);
@@ -300,11 +370,19 @@ export function useKaizenSync({ data, onReplaceData }) {
       } catch (error) {
         console.error("Kaizen initial sync error", error);
         hasBootstrappedRef.current = true;
-        const localRecords = recordsFromData(normalized.data);
         recordsRef.current = localRecords;
         writeSyncCache(localRecords);
-        queueRef.current = [...queueRef.current, ...queueFromRecords(localRecords)];
-        writeSyncQueue(queueRef.current);
+        if (countRecords(localRecords) > 0) {
+          queueRef.current = [...queueRef.current, ...queueFromRecords(localRecords)];
+          writeSyncQueue(queueRef.current);
+        }
+        setDiagnostics((current) => ({
+          ...current,
+          cacheCount: countRecords(localRecords),
+          localCount,
+          queueCount: queueRef.current.length,
+          source: recovery.source,
+        }));
         setStatus(navigator.onLine ? STATUS.error : STATUS.offline);
         setMessage("Uso i dati locali. La sincronizzazione riprovera' appena possibile.");
       }
@@ -441,11 +519,27 @@ export function useKaizenSync({ data, onReplaceData }) {
   }
 
   function exportBackup() {
+    const recovery = getBestLocalRecoveryData();
+    const latestBackup = readLatestLegacyBackup();
     const payload = {
       exportedAt: new Date().toISOString(),
       migrationVersion: MIGRATION_VERSION,
+      recovery: {
+        backupCount: recovery.backupCount,
+        backupKey: recovery.backupKey,
+        cacheCount: recovery.syncCacheCount,
+        legacyCount: recovery.legacyCount,
+        source: recovery.source,
+      },
       syncMeta: readSyncMeta(),
-      data: readLegacyData(),
+      syncCache: readSyncCache(),
+      latestLegacyBackup: latestBackup
+        ? {
+            createdAt: latestBackup.createdAt,
+            key: latestBackup.key,
+          }
+        : null,
+      data: recovery.data,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
@@ -487,6 +581,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       lastSuccessfulSyncAt,
       message,
       migrationInfo,
+      diagnostics,
       pendingCount: queueRef.current.length,
       signIn,
       signOut,
@@ -502,6 +597,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       lastSuccessfulSyncAt,
       message,
       migrationInfo,
+      diagnostics,
       status,
       trackCollectionChange,
       user,

@@ -40,6 +40,145 @@ export function writeLegacyData(data) {
   }
 }
 
+export function countDataItems(data) {
+  if (!data || typeof data !== "object") {
+    return 0;
+  }
+
+  return COLLECTIONS.reduce((count, collection) => {
+    const value = data[collection.name];
+
+    if (collection.kind === "array" || collection.kind === "arrayValue") {
+      return count + (Array.isArray(value) ? value.length : 0);
+    }
+
+    if (collection.kind === "objectMap") {
+      return count + (value && typeof value === "object" && !Array.isArray(value)
+        ? Object.keys(value).length
+        : 0);
+    }
+
+    return count + (isMeaningfulSingleton(value, collection.fallback) ? 1 : 0);
+  }, 0);
+}
+
+export function countRecords(records) {
+  return countDataItems(dataFromRecords(records || []));
+}
+
+export function readLegacyBackups(storage = getBrowserStorage()) {
+  if (!storage) {
+    return [];
+  }
+
+  const backups = [];
+
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+
+      if (!key?.startsWith("kaizen_legacy_backup_")) {
+        continue;
+      }
+
+      const rawValue = storage.getItem(key);
+      const parsed = rawValue ? JSON.parse(rawValue) : null;
+      const data = parsed?.data;
+
+      if (!data || typeof data !== "object") {
+        continue;
+      }
+
+      backups.push({
+        key,
+        createdAt: parsed.createdAt || key.replace("kaizen_legacy_backup_", ""),
+        data,
+      });
+    }
+  } catch (error) {
+    console.warn("Kaizen legacy backup scan failed", error);
+  }
+
+  return backups.sort((left, right) =>
+    String(right.createdAt || right.key).localeCompare(String(left.createdAt || left.key)),
+  );
+}
+
+export function readLatestLegacyBackup(storage = getBrowserStorage()) {
+  return findLatestBackupWithData(readLegacyBackups(storage));
+}
+
+export function getBestLocalRecoveryData(options = {}) {
+  const timestamp = options.timestamp || nowIso();
+  const idFactory = options.idFactory || createId;
+  const rawLegacy = options.rawLegacy || readLegacyData();
+  const normalizedLegacy = normalizeLegacyData(rawLegacy, timestamp, idFactory);
+  const legacyCount = countDataItems(normalizedLegacy.data);
+  const latestBackup =
+    options.latestBackup || findLatestBackupWithData(readLegacyBackups(options.storage));
+  const normalizedBackup = latestBackup?.data
+    ? normalizeLegacyData(latestBackup.data, timestamp, idFactory)
+    : null;
+  const backupCount = normalizedBackup ? countDataItems(normalizedBackup.data) : 0;
+  const syncCacheRecords = options.syncCacheRecords || readSyncCache().records || [];
+  const syncCacheCount = countRecords(syncCacheRecords);
+  const sources = [];
+
+  if (legacyCount > 0) {
+    sources.push({
+      count: legacyCount,
+      name: "legacy",
+      records: recordsFromData(normalizedLegacy.data, timestamp),
+      warnings: normalizedLegacy.warnings,
+    });
+  }
+
+  if (backupCount > 0) {
+    sources.push({
+      count: backupCount,
+      key: latestBackup.key,
+      name: "legacyBackup",
+      records: recordsFromData(normalizedBackup.data, timestamp),
+      warnings: normalizedBackup.warnings,
+    });
+  }
+
+  if (syncCacheCount > 0) {
+    sources.push({
+      count: syncCacheCount,
+      name: "syncCache",
+      records: syncCacheRecords,
+      warnings: [],
+    });
+  }
+
+  if (sources.length === 0) {
+    return {
+      backupCount,
+      backupKey: latestBackup?.key || "",
+      data: normalizedLegacy.data,
+      legacyCount,
+      records: recordsFromData(normalizedLegacy.data, timestamp),
+      source: "emptyLegacy",
+      syncCacheCount,
+      warnings: normalizedLegacy.warnings,
+    };
+  }
+
+  const merged = mergeRecordSources(sources, timestamp, idFactory);
+
+  return {
+    backupCount,
+    backupKey: latestBackup?.key || "",
+    data: dataFromRecords(merged.records),
+    legacyCount,
+    records: merged.records,
+    source: merged.source,
+    syncCacheCount,
+    warnings: merged.warnings,
+  };
+}
+
 export function createLegacyBackup(snapshot, timestamp = nowIso()) {
   const backupKey = `kaizen_legacy_backup_${timestamp.replace(/[:.]/g, "-")}`;
   writeStorage(backupKey, {
@@ -313,6 +452,117 @@ export function mergeRecords(localRecords, remoteRecords, options = {}) {
   };
 }
 
+export function mergeRecordSources(sources, timestamp = nowIso(), idFactory = createId) {
+  const activeSources = sources.filter((source) => Array.isArray(source.records));
+  const firstSource = activeSources[0];
+  let records = firstSource?.records || [];
+  const usedSources = firstSource ? [firstSource.name] : [];
+  const warnings = [...(firstSource?.warnings || [])];
+  let remoteUpserts = [];
+  let conflicts = [];
+
+  for (const source of activeSources.slice(1)) {
+    const merged = mergeRecords(records, source.records, { timestamp, idFactory });
+    records = merged.mergedRecords;
+    remoteUpserts = [...remoteUpserts, ...merged.remoteUpserts];
+    conflicts = [...conflicts, ...merged.conflicts];
+    warnings.push(...(source.warnings || []));
+    usedSources.push(source.name);
+  }
+
+  return {
+    conflicts,
+    records: dedupeRecords(records),
+    remoteUpserts: dedupeRecords(remoteUpserts),
+    source: usedSources.join("+") || "empty",
+    warnings,
+  };
+}
+
+export function mergeBootstrapRecords(options = {}) {
+  const timestamp = options.timestamp || nowIso();
+  const idFactory = options.idFactory || createId;
+  const localRecords = options.localRecords || [];
+  const remoteRecords = options.remoteRecords || [];
+  const localCount = countRecords(localRecords);
+  const remoteCount = countRecords(remoteRecords);
+  const recoverySource = options.recoverySource || "local";
+
+  if (localCount > 0 && remoteCount === 0) {
+    return {
+      conflicts: [],
+      localCount,
+      mergedCount: localCount,
+      mergedRecords: localRecords,
+      remoteCount,
+      remoteUpserts: localRecords,
+      source: recoverySource,
+    };
+  }
+
+  if (localCount === 0 && remoteCount > 0) {
+    return {
+      conflicts: [],
+      localCount,
+      mergedCount: remoteCount,
+      mergedRecords: remoteRecords,
+      remoteCount,
+      remoteUpserts: [],
+      source: "remote",
+    };
+  }
+
+  if (localCount === 0 && remoteCount === 0) {
+    return {
+      conflicts: [],
+      localCount,
+      mergedCount: 0,
+      mergedRecords: localRecords,
+      remoteCount,
+      remoteUpserts: [],
+      source: "empty",
+    };
+  }
+
+  const merged = mergeRecordSources(
+    [
+      {
+        name: recoverySource,
+        records: localRecords,
+        warnings: options.warnings || [],
+      },
+      {
+        name: "remote",
+        records: remoteRecords,
+        warnings: [],
+      },
+    ],
+    timestamp,
+    idFactory,
+  );
+  const mergedCount = countRecords(merged.records);
+
+  validateMigrationResult(localCount, mergedCount);
+
+  return {
+    conflicts: merged.conflicts,
+    localCount,
+    mergedCount,
+    mergedRecords: merged.records,
+    remoteCount,
+    remoteUpserts: merged.remoteUpserts,
+    source: merged.source,
+  };
+}
+
+export function validateMigrationResult(localCount, mergedCount) {
+  if (localCount > 0 && mergedCount === 0) {
+    throw new Error(
+      "Migrazione bloccata: esistono dati locali ma il merge ha prodotto zero record.",
+    );
+  }
+}
+
 export function diffCollectionRecords(previousRecords, nextData, collectionName, timestamp = nowIso()) {
   const previous = previousRecords.filter((record) => record.collection === collectionName);
   const nextRecords = recordsFromData({ [collectionName]: nextData }, timestamp).filter(
@@ -477,4 +727,31 @@ function compareDates(left, right) {
 
 function pickDate(...values) {
   return values.find((value) => value && !Number.isNaN(new Date(value).getTime())) || nowIso();
+}
+
+function isMeaningfulSingleton(value, fallback) {
+  if (value === undefined || value === null || value === "") {
+    return false;
+  }
+
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+
+  return JSON.stringify(value) !== JSON.stringify(fallback);
+}
+
+function getBrowserStorage() {
+  return typeof window !== "undefined" ? window.localStorage : undefined;
+}
+
+function findLatestBackupWithData(backups) {
+  return (
+    backups.find((backup) => {
+      const normalized = normalizeLegacyData(backup.data);
+      return countDataItems(normalized.data) > 0;
+    }) ||
+    backups[0] ||
+    null
+  );
 }
