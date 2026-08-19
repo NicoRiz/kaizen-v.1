@@ -16,12 +16,14 @@ export default function SyncStatus({ sync }) {
   const [isImportingLocal, setIsImportingLocal] = useState(false);
   const [isAnalyzingDuplicates, setIsAnalyzingDuplicates] = useState(false);
   const [isReplacingLocal, setIsReplacingLocal] = useState(false);
+  const [showLegacyRecovery, setShowLegacyRecovery] = useState(false);
   const fileInputRef = useRef(null);
   const label = STATUS_LABELS[sync.status] || "Sync";
   const localRecordCount =
     sync.diagnostics?.localCount ?? sync.diagnostics?.legacyCount ?? 0;
   const remoteRecordCount = sync.diagnostics?.remoteCount ?? "n/d";
   const deviceMigration = sync.diagnostics?.deviceMigration;
+  const preImportSnapshot = sync.diagnostics?.preImportSnapshot;
   const deviceMigrationLabel = deviceMigration?.deviceMigrationCompletedAt
     ? "Completata"
     : deviceMigration?.deviceMigrationStartedAt
@@ -29,6 +31,7 @@ export default function SyncStatus({ sync }) {
       : "In attesa";
   const canImportLocal =
     sync.isAuthenticated &&
+    showLegacyRecovery &&
     !sync.ignoreLocalForCloudImport &&
     localRecordCount > 0 &&
     typeof sync.importLocalDataIntoAccount === "function";
@@ -94,7 +97,7 @@ export default function SyncStatus({ sync }) {
     try {
       const result = await sync.replaceLocalDataWithAccount();
       setImportMessage(
-        `Dati locali sostituiti con account: ${result.remoteCount} record. Snapshot creato: ${result.snapshotKey ? "si" : "no"}.`,
+        `Dati ricaricati dall'account: ${result.remoteCount} record. Snapshot creato: ${result.snapshotKey ? "si" : "no"}.`,
       );
     } catch (error) {
       console.error("Kaizen replace local error", error);
@@ -102,6 +105,17 @@ export default function SyncStatus({ sync }) {
     } finally {
       setIsReplacingLocal(false);
     }
+  }
+
+  function handleExportPreImportSnapshot() {
+    const result = sync.exportLatestPreImportSnapshot?.();
+
+    if (result?.exported) {
+      setImportMessage("Snapshot pre-import esportato. Nessun dato remoto e' stato modificato.");
+      return;
+    }
+
+    setImportMessage("Nessuno snapshot pre-import disponibile su questo dispositivo.");
   }
 
   return (
@@ -185,6 +199,10 @@ export default function SyncStatus({ sync }) {
                   <dd>{sync.diagnostics?.snapshotKey ? "presente" : "assente"}</dd>
                 </div>
                 <div>
+                  <dt>Snapshot pre-import</dt>
+                  <dd>{preImportSnapshot ? preImportSnapshot.createdAt : "assente"}</dd>
+                </div>
+                <div>
                   <dt>Migrazione dispositivo</dt>
                   <dd>{deviceMigrationLabel}</dd>
                 </div>
@@ -202,45 +220,13 @@ export default function SyncStatus({ sync }) {
             {sync.message && <p className="form-error">{sync.message}</p>}
             {importMessage && <p className="empty-state">{importMessage}</p>}
 
-            {canImportLocal && (
-              <div className="sync-import-box">
-                <p>
-                  <strong>Dati locali trovati: {localRecordCount}</strong>
-                  <span>Record remoti: {remoteRecordCount}</span>
-                </p>
-                <button
-                  className="submit-button"
-                  disabled={isImportingLocal}
-                  onClick={handleLocalImport}
-                  type="button"
-                >
-                  {isImportingLocal
-                    ? "Importazione..."
-                    : "Importa dati locali in questo account"}
-                </button>
-              </div>
-            )}
-
             <div className="sync-import-box">
               <p>
-                <strong>Import locale da questo dispositivo</strong>
+                <strong>Ricarica dati dall'account</strong>
                 <span>
-                  {sync.ignoreLocalForCloudImport
-                    ? "Disattivato: questo device non carichera' dati locali nel cloud."
-                    : "Attivo solo tramite pulsante esplicito, mai al bootstrap."}
+                  Scarica Supabase e ricostruisce la cache locale senza caricare dati locali.
                 </span>
               </p>
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  sync.setLocalCloudImportDisabled(!sync.ignoreLocalForCloudImport)
-                }
-                type="button"
-              >
-                {sync.ignoreLocalForCloudImport
-                  ? "Riattiva import locale"
-                  : "Disattiva import automatico dati locali da questo dispositivo"}
-              </button>
               <button
                 className="secondary-button"
                 disabled={isReplacingLocal || !sync.isAuthenticated}
@@ -248,10 +234,78 @@ export default function SyncStatus({ sync }) {
                 type="button"
               >
                 {isReplacingLocal
-                  ? "Sostituzione..."
-                  : "Sostituisci dati locali con account"}
+                  ? "Ricarica..."
+                  : "Ricarica dati dall'account"}
               </button>
             </div>
+
+            <div className="sync-import-box">
+              <p>
+                <strong>Diagnostica avanzata</strong>
+                <span>Recovery legacy protetta: non usarla nel normale utilizzo.</span>
+              </p>
+              <button
+                className="secondary-button"
+                onClick={() => setShowLegacyRecovery((isShown) => !isShown)}
+                type="button"
+              >
+                {showLegacyRecovery ? "Nascondi recovery legacy" : "Recovery legacy"}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={!preImportSnapshot}
+                onClick={handleExportPreImportSnapshot}
+                type="button"
+              >
+                Esporta snapshot pre-import
+              </button>
+            </div>
+
+            {preImportSnapshot && (
+              <div className="sync-import-box">
+                <p>
+                  <strong>Snapshot pre-import piu' recente</strong>
+                  <span>{preImportSnapshot.createdAt}</span>
+                </p>
+                <small>
+                  Device {preImportSnapshot.deviceId || "n/d"} · {preImportSnapshot.recordCount} record · {preImportSnapshot.sizeBytes} byte · {preImportSnapshot.fingerprint}
+                </small>
+              </div>
+            )}
+
+            {showLegacyRecovery && (
+              <div className="sync-import-box danger-zone">
+                <p>
+                  <strong>Importa dati locali in questo account</strong>
+                  <span>
+                    Funzione legacy di recovery. Puo' creare duplicati se i dati sono gia' in Supabase.
+                  </span>
+                </p>
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    sync.setLocalCloudImportDisabled(!sync.ignoreLocalForCloudImport)
+                  }
+                  type="button"
+                >
+                  {sync.ignoreLocalForCloudImport
+                    ? "Sblocca import legacy"
+                    : "Blocca import legacy"}
+                </button>
+                {canImportLocal && (
+                  <button
+                    className="submit-button"
+                    disabled={isImportingLocal}
+                    onClick={handleLocalImport}
+                    type="button"
+                  >
+                    {isImportingLocal
+                      ? "Importazione..."
+                      : "Importa dati locali in questo account"}
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="sync-import-box">
               <p>
@@ -284,7 +338,7 @@ export default function SyncStatus({ sync }) {
                       <strong>{snapshot.recordCount} record</strong>
                       <span>{snapshot.createdAt}</span>
                       <small>
-                        {snapshot.deviceId || "device n/d"} · {snapshot.sizeBytes} byte
+                        {snapshot.reason || "snapshot"} · {snapshot.deviceId || "device n/d"} · {snapshot.sizeBytes} byte
                       </small>
                     </li>
                   ))}

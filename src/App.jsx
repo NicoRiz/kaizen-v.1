@@ -8,8 +8,8 @@ import SyncStatus from "./components/SyncStatus.jsx";
 import { useKaizenSync } from "./hooks/useKaizenSync.js";
 import { COLLECTIONS, STORAGE_KEYS } from "./lib/kaizenData.js";
 import {
+  createCachedKaizenData,
   createId,
-  getBestLocalRecoveryData,
   nowIso,
 } from "./lib/syncCore.js";
 import { dateKey } from "./utils/date.js";
@@ -65,7 +65,7 @@ function normalizeLegacyTask(task, index) {
 }
 
 function initialKaizenData() {
-  return getBestLocalRecoveryData().data;
+  return createCachedKaizenData();
 }
 
 export default function App() {

@@ -9,6 +9,7 @@ import {
   countRecords,
   createDeviceSnapshot,
   createLegacyBackup,
+  countDataCollections,
   dataFromRecords,
   deserializeRecordFromSupabase,
   diffCollectionRecords,
@@ -19,11 +20,13 @@ import {
   mergeRecords,
   mergeQueuedRecords,
   normalizeLegacyData,
-  planBootstrapSync,
+  normalizeSyncQueue,
+  planSupabaseFirstBootstrap,
   readLegacyData,
   readDeviceSnapshots,
   readLatestLegacyBackup,
   readLatestDeviceSnapshot,
+  readLatestPreImportDeviceSnapshot,
   readSyncCache,
   readSyncMeta,
   readSyncQueue,
@@ -46,6 +49,24 @@ const STATUS = {
   localOnly: "localOnly",
 };
 
+function summarizePreImportSnapshot(snapshot) {
+  if (!snapshot) {
+    return null;
+  }
+
+  return {
+    collectionCounts: snapshot.collectionCounts || countDataCollections(snapshot.data),
+    createdAt: snapshot.createdAt,
+    deviceId: snapshot.deviceId,
+    fingerprint:
+      snapshot.fingerprint ||
+      fingerprintRecords(recordsFromData(normalizeLegacyData(snapshot.data).data)),
+    key: snapshot.key,
+    recordCount: snapshot.recordCount,
+    sizeBytes: snapshot.sizeBytes,
+  };
+}
+
 export function useKaizenSync({ data, onReplaceData }) {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -67,12 +88,15 @@ export function useKaizenSync({ data, onReplaceData }) {
   });
   const deviceId = deviceContext.deviceId;
   const [ignoreLocalForCloudImport, setIgnoreLocalForCloudImport] = useState(
-    () => Boolean(readSyncMeta().deviceSettings?.[deviceId]?.ignoreLocalForCloudImport),
+    () => readSyncMeta().deviceSettings?.[deviceId]?.ignoreLocalForCloudImport !== false,
   );
   const [diagnostics, setDiagnostics] = useState(() => {
     const recovery = getBestLocalRecoveryData();
     const meta = readSyncMeta();
     const snapshotSummaries = summarizeDeviceSnapshots();
+    const preImportSnapshot = summarizePreImportSnapshot(
+      readLatestPreImportDeviceSnapshot(),
+    );
 
     return {
       backupCount: recovery.backupCount,
@@ -83,7 +107,8 @@ export function useKaizenSync({ data, onReplaceData }) {
       deviceMigration: meta.deviceMigrations?.[deviceId] || null,
       legacyCount: recovery.legacyCount,
       localCount: countDataItems(recovery.data),
-      queueCount: readSyncQueue().length,
+      queueCount: normalizeSyncQueue(readSyncQueue()).length,
+      preImportSnapshot,
       remoteCount: null,
       snapshotSummaries,
       snapshotCount: recovery.snapshotCount,
@@ -93,7 +118,7 @@ export function useKaizenSync({ data, onReplaceData }) {
   });
   const [authError, setAuthError] = useState("");
   const recordsRef = useRef(readSyncCache().records || []);
-  const queueRef = useRef(readSyncQueue());
+  const queueRef = useRef(normalizeSyncQueue(readSyncQueue()));
   const hasBootstrappedRef = useRef(false);
   const applyingRemoteRef = useRef(false);
   const flushPromiseRef = useRef(null);
@@ -258,7 +283,8 @@ export function useKaizenSync({ data, onReplaceData }) {
     }
 
     flushPromiseRef.current = (async () => {
-      const queue = queueRef.current;
+      const queue = normalizeSyncQueue(queueRef.current);
+      queueRef.current = queue;
 
       if (queue.length === 0) {
         setStatus(STATUS.synced);
@@ -272,12 +298,8 @@ export function useKaizenSync({ data, onReplaceData }) {
       setStatus(STATUS.syncing);
 
       try {
-        const pendingRecords = queue.map((item) => item.record);
-        const remoteRecords = await fetchRemoteRecords();
-        const merged = mergeRecords(pendingRecords, remoteRecords);
-        const remoteCount = countRecords(remoteRecords);
-        const rows = merged.remoteUpserts.map((record) =>
-          serializeRecordForSupabase(record, user.id),
+        const rows = queue.map((item) =>
+          serializeRecordForSupabase(item.record, user.id),
         );
 
         if (rows.length > 0) {
@@ -290,15 +312,13 @@ export function useKaizenSync({ data, onReplaceData }) {
           }
         }
 
-        const nextRecords = applyChangedRecords(recordsRef.current, merged.mergedRecords);
-        replaceFromRecords(nextRecords);
         queueRef.current = [];
         writeSyncQueue([]);
         setDiagnostics((current) => ({
           ...current,
-          cacheCount: countRecords(nextRecords),
+          cacheCount: countRecords(recordsRef.current),
           queueCount: 0,
-          remoteCount,
+          remoteCount: countRecords(recordsRef.current),
         }));
         const timestamp = new Date().toISOString();
         setLastSuccessfulSyncAt(timestamp);
@@ -318,7 +338,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       } catch (error) {
         console.error("Kaizen sync queue error", error);
         setStatus(navigator.onLine ? STATUS.error : STATUS.offline);
-        setMessage("Alcune modifiche sono salvate localmente e verranno ritentate.");
+        setMessage("Modifica in attesa di sincronizzazione. Riprovero' appena possibile.");
         return false;
       } finally {
         flushPromiseRef.current = null;
@@ -336,6 +356,12 @@ export function useKaizenSync({ data, onReplaceData }) {
 
       queueRef.current = mergeQueuedRecords(queueRef.current, records);
       writeSyncQueue(queueRef.current);
+      setStatus(navigator.onLine ? STATUS.syncing : STATUS.offline);
+      setMessage(
+        navigator.onLine
+          ? "Sincronizzazione modifica..."
+          : "Modifica in attesa di sincronizzazione.",
+      );
       setDiagnostics((current) => ({
         ...current,
         queueCount: queueRef.current.length,
@@ -377,28 +403,23 @@ export function useKaizenSync({ data, onReplaceData }) {
         includeRecoverySources: false,
         rawLegacy: rawLocal,
       });
-      const localRecords = recovery.records;
       const localCount = countDataItems(recovery.data);
-      const sourceFingerprint = fingerprintRecords(localRecords);
+      const sourceFingerprint = fingerprintRecords(recovery.records);
       const previousDeviceMigration = readSyncMeta().deviceMigrations?.[deviceId] || {};
-      const sourceAlreadyImported =
-        previousDeviceMigration.deviceMigrationCompletedAt &&
-        previousDeviceMigration.sourceFingerprint === sourceFingerprint;
       const backupKey = previousDeviceMigration.legacyBackupKey || "";
       const deviceMigrationId = `${deviceId}:${timestamp}`;
+      const cacheRecords = readSyncCache().records || [];
+      const cacheCount = countRecords(cacheRecords);
 
-      if (localCount > 0) {
-        writeLegacyData(recovery.data);
-        onReplaceData(recovery.data);
-        recordsRef.current = localRecords;
-        writeSyncCache(localRecords);
+      if (cacheCount > 0) {
+        replaceFromRecords(cacheRecords);
       }
 
       setDiagnostics((current) => ({
         ...current,
         backupCount: recovery.backupCount,
         backupKey: recovery.backupKey || backupKey,
-        cacheCount: recovery.syncCacheCount,
+        cacheCount,
         deviceId,
         deviceMigration: {
           deviceId,
@@ -408,42 +429,39 @@ export function useKaizenSync({ data, onReplaceData }) {
         },
         legacyCount: recovery.legacyCount,
         localCount,
+        preImportSnapshot: summarizePreImportSnapshot(readLatestPreImportDeviceSnapshot()),
         queueCount: queueRef.current.length,
         snapshotSummaries: summarizeDeviceSnapshots(),
         snapshotCount: recovery.snapshotCount,
         snapshotKey,
-        source: recovery.source,
+        source: cacheCount > 0 ? "cache" : "empty-cache",
       }));
       writeDeviceMigrationMeta({
         deviceMigrationId,
         deviceMigrationStartedAt: timestamp,
         deviceSnapshotKey: snapshotKey,
         legacyBackupKey: backupKey,
+        localImportIgnored: true,
         localRecordCount: localCount,
-        recoverySource: recovery.source,
-        sourceAlreadyImported,
+        recoverySource: cacheCount > 0 ? "cache" : "empty-cache",
+        requiresExplicitImport: false,
+        sourceAlreadyImported: Boolean(previousDeviceMigration.deviceMigrationCompletedAt),
         sourceFingerprint,
       });
 
       try {
         const remoteRecords = await fetchRemoteRecords();
-        const merged = planBootstrapSync({
-          ignoreLocalForCloudImport,
-          localRecords,
-          recoverySource: recovery.source,
+        const plan = planSupabaseFirstBootstrap({
+          cacheRecords,
           remoteRecords,
-          warnings: recovery.warnings,
         });
-        const remoteCount = merged.remoteCount;
-        const mergedCount = merged.mergedCount;
+        const remoteCount = plan.remoteCount;
 
         if (cancelled) {
           return;
         }
 
-        if (merged.shouldReplaceLocal) {
-          replaceFromRecords(merged.mergedRecords);
-        }
+        replaceFromRecords(plan.authoritativeRecords);
         hasBootstrappedRef.current = true;
 
         const nextMeta = {
@@ -454,13 +472,14 @@ export function useKaizenSync({ data, onReplaceData }) {
           deviceId,
           deviceMigrationId,
           deviceSnapshotKey: snapshotKey,
-          conflictCount: merged.conflicts.length,
+          conflictCount: 0,
+          localImportIgnored: true,
           localRecordCount: localCount,
           remoteRecordCount: remoteCount,
-          recoveredRecordCount: mergedCount,
-          recoverySource: merged.source || recovery.source,
-          requiresExplicitImport: merged.requiresExplicitImport,
-          sourceAlreadyImported,
+          recoveredRecordCount: remoteCount,
+          recoverySource: plan.source,
+          requiresExplicitImport: false,
+          sourceAlreadyImported: Boolean(previousDeviceMigration.deviceMigrationCompletedAt),
           sourceFingerprint,
           warnings: recovery.warnings,
         };
@@ -468,68 +487,59 @@ export function useKaizenSync({ data, onReplaceData }) {
         writeSyncMeta(nextMeta);
         setDiagnostics((current) => ({
           ...current,
-          cacheCount: mergedCount,
+          cacheCount: remoteCount,
           localCount,
+          preImportSnapshot: summarizePreImportSnapshot(readLatestPreImportDeviceSnapshot()),
           queueCount: queueRef.current.length,
           remoteCount,
           snapshotSummaries: summarizeDeviceSnapshots(),
           snapshotKey,
-          source: merged.source || recovery.source,
+          source: plan.source,
         }));
         writeDeviceMigrationMeta({
-          conflictCount: merged.conflicts.length,
+          conflictCount: 0,
           deviceMigrationId,
           deviceMigrationStartedAt: timestamp,
           deviceSnapshotKey: snapshotKey,
-          importedRecordCount: merged.remoteUpserts.length,
+          importedRecordCount: 0,
           legacyBackupKey: backupKey,
+          localImportIgnored: true,
           localRecordCount: localCount,
           remoteRecordCount: remoteCount,
-          recoveredRecordCount: mergedCount,
-          recoverySource: merged.source || recovery.source,
-          requiresExplicitImport: merged.requiresExplicitImport,
-          sourceAlreadyImported,
+          recoveredRecordCount: remoteCount,
+          recoverySource: plan.source,
+          requiresExplicitImport: false,
+          sourceAlreadyImported: Boolean(previousDeviceMigration.deviceMigrationCompletedAt),
           sourceFingerprint,
           warnings: recovery.warnings,
         });
 
-        if (merged.requiresExplicitImport || merged.localImportIgnored) {
-          setStatus(STATUS.synced);
-          setMessage(
-            ignoreLocalForCloudImport
-              ? "Import locale disattivato per questo dispositivo. Il cloud non verra' modificato."
-              : "Dati locali rilevati. Usa import esplicito per caricarli nell'account.",
-          );
-        } else {
-          const completedAt = new Date().toISOString();
-          markDeviceMigrationCompleted({
-            completedAt,
-            conflictCount: merged.conflicts.length,
-            deviceMigrationId,
-            importedRecordCount: 0,
-            localRecordCount: localCount,
-            remoteRecordCount: remoteCount,
-            recoveredRecordCount: mergedCount,
-            sourceFingerprint,
-          });
-          setStatus(STATUS.synced);
-        }
+        const completedAt = new Date().toISOString();
+        markDeviceMigrationCompleted({
+          completedAt,
+          conflictCount: 0,
+          deviceMigrationId,
+          importedRecordCount: 0,
+          localImportIgnored: true,
+          localRecordCount: localCount,
+          remoteRecordCount: remoteCount,
+          recoveredRecordCount: remoteCount,
+          sourceFingerprint,
+        });
+        setStatus(STATUS.synced);
+        setMessage("");
       } catch (error) {
         console.error("Kaizen initial sync error", error);
         hasBootstrappedRef.current = true;
-        recordsRef.current = localRecords;
-        writeSyncCache(localRecords);
-        if (countRecords(localRecords) > 0) {
-          queueRef.current = mergeQueuedRecords(queueRef.current, localRecords);
-          writeSyncQueue(queueRef.current);
-        }
+        recordsRef.current = cacheRecords;
+        writeSyncCache(cacheRecords);
         setDiagnostics((current) => ({
           ...current,
-          cacheCount: countRecords(localRecords),
+          cacheCount,
           localCount,
           queueCount: queueRef.current.length,
           snapshotKey,
-          source: recovery.source,
+          source: cacheCount > 0 ? "cache-offline" : "empty-cache",
         }));
         writeDeviceMigrationMeta({
           deviceMigrationId,
@@ -537,13 +547,15 @@ export function useKaizenSync({ data, onReplaceData }) {
           deviceSnapshotKey: snapshotKey,
           error: error.message || "Sync iniziale non riuscita",
           legacyBackupKey: backupKey,
+          localImportIgnored: true,
           localRecordCount: localCount,
-          recoverySource: recovery.source,
-          sourceAlreadyImported,
+          recoverySource: cacheCount > 0 ? "cache-offline" : "empty-cache",
+          requiresExplicitImport: false,
+          sourceAlreadyImported: Boolean(previousDeviceMigration.deviceMigrationCompletedAt),
           sourceFingerprint,
         });
         setStatus(navigator.onLine ? STATUS.error : STATUS.offline);
-        setMessage("Uso i dati locali. La sincronizzazione riprovera' appena possibile.");
+        setMessage("Uso la cache locale. Supabase resta la fonte autorevole e verra' ricaricato appena possibile.");
       }
     }
 
@@ -556,8 +568,6 @@ export function useKaizenSync({ data, onReplaceData }) {
     authReady,
     canUseCloud,
     deviceId,
-    enqueueRecords,
-    ignoreLocalForCloudImport,
     lastSuccessfulSyncAt,
     replaceFromRecords,
     user?.id,
@@ -755,6 +765,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       deviceId,
       legacyCount: recovery.legacyCount,
       localCount,
+      preImportSnapshot: summarizePreImportSnapshot(readLatestPreImportDeviceSnapshot()),
       queueCount: queueRef.current.length,
       remoteCount,
       snapshotSummaries: summarizeDeviceSnapshots(),
@@ -961,6 +972,49 @@ export function useKaizenSync({ data, onReplaceData }) {
     URL.revokeObjectURL(url);
   }
 
+  function exportLatestPreImportSnapshot() {
+    const snapshot = readLatestPreImportDeviceSnapshot();
+
+    if (!snapshot) {
+      setMessage("Nessuno snapshot pre-import disponibile su questo dispositivo.");
+      return {
+        exported: false,
+      };
+    }
+
+    const payload = {
+      collectionCounts: snapshot.collectionCounts || countDataCollections(snapshot.data),
+      createdAt: snapshot.createdAt,
+      data: snapshot.data,
+      deviceId: snapshot.deviceId,
+      exportedAt: new Date().toISOString(),
+      fingerprint:
+        snapshot.fingerprint ||
+        fingerprintRecords(recordsFromData(normalizeLegacyData(snapshot.data).data)),
+      key: snapshot.key,
+      migrationVersion: MIGRATION_VERSION,
+      reason: snapshot.reason,
+      recordCount: snapshot.recordCount,
+      sizeBytes: snapshot.sizeBytes,
+      type: "kaizen-pre-import-device-snapshot",
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `kaizen-pre-import-snapshot-${payload.createdAt.slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setMessage("Snapshot pre-import esportato. Nessun dato remoto e' stato modificato.");
+
+    return {
+      exported: true,
+      snapshotKey: snapshot.key,
+    };
+  }
+
   async function importBackup(file) {
     const text = await file.text();
     const parsed = JSON.parse(text);
@@ -985,6 +1039,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       canUseCloud,
       config: supabaseConfig,
       exportBackup,
+      exportLatestPreImportSnapshot,
       ignoreLocalForCloudImport,
       importBackup,
       importLocalDataIntoAccount,

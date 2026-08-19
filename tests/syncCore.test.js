@@ -17,7 +17,10 @@ import {
   mergeRecords,
   mergeQueuedRecords,
   normalizeLegacyData,
+  normalizeSyncQueue,
+  operationsFromRecords,
   planBootstrapSync,
+  planSupabaseFirstBootstrap,
   pruneDeviceSnapshots,
   queueFromRecords,
   readDeviceSnapshots,
@@ -690,6 +693,47 @@ test("Sync queue deduplicates repeated pending records by collection and id", ()
 
   assert.equal(firstQueue.length, 1);
   assert.equal(secondQueue.length, 1);
+});
+
+test("Supabase-first bootstrap treats remote as authoritative and never uploads cache", () => {
+  const remote = recordsFromData({
+    nextActions: [action("remote-a", "Remote A")],
+  });
+  const cache = recordsFromData({
+    nextActions: [action("cache-a", "Cache A")],
+  });
+  const plan = planSupabaseFirstBootstrap({
+    cacheRecords: cache,
+    remoteRecords: remote,
+  });
+
+  assert.equal(plan.shouldUploadLocal, false);
+  assert.equal(plan.requiresExplicitImport, false);
+  assert.equal(plan.localImportIgnored, true);
+  assert.equal(countRecords(plan.authoritativeRecords), 1);
+  assert.equal(dataFromRecords(plan.authoritativeRecords).nextActions[0].title, "Remote A");
+});
+
+test("Sync queue stores operations and deduplicates upsert/delete by record", () => {
+  const created = recordsFromData({
+    nextActions: [action("queued-a", "Queued A")],
+  }).find((record) => record.collection === "nextActions");
+  const deleted = {
+    ...created,
+    deleted_at: "2026-08-15T15:00:00.000Z",
+    updated_at: "2026-08-15T15:00:00.000Z",
+  };
+  const queue = mergeQueuedRecords(
+    operationsFromRecords([created]),
+    [deleted],
+    "2026-08-15T15:00:00.000Z",
+  );
+  const normalized = normalizeSyncQueue(queue);
+
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].type, "delete");
+  assert.equal(normalized[0].collection, "nextActions");
+  assert.equal(normalized[0].recordId, "queued-a");
 });
 
 test("Duplicate analysis is read-only and estimates duplicate groups", () => {

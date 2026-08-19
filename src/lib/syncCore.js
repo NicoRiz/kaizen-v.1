@@ -11,6 +11,7 @@ import { readStorage, writeStorage } from "../utils/storage.js";
 const ISO_FALLBACK = "1970-01-01T00:00:00.000Z";
 const DEVICE_SNAPSHOT_PREFIX = "kaizen_device_snapshot_";
 const MAX_DEVICE_SNAPSHOTS = 5;
+const QUEUE_VERSION = 2;
 
 function defaultLegacyIdFactory(context = {}) {
   return createStableLegacyId(context.collection, context.item, context.index);
@@ -151,13 +152,17 @@ export function createDeviceSnapshot(options = {}) {
 
   pruneDeviceSnapshots(storage, MAX_DEVICE_SNAPSHOTS - 1);
 
+  const snapshotData = readLegacyDataFromStorage(storage);
+  const snapshotRecords = recordsFromData(normalizeLegacyData(snapshotData).data);
   const snapshot = {
+    collectionCounts: countDataCollections(snapshotData),
     createdAt: timestamp,
     deviceId,
+    fingerprint: fingerprintRecords(snapshotRecords),
     migrationVersion: MIGRATION_VERSION,
     reason,
-    recordCount: countDataItems(readLegacyDataFromStorage(storage)),
-    data: readLegacyDataFromStorage(storage),
+    recordCount: countDataItems(snapshotData),
+    data: snapshotData,
   };
   const snapshotKey = `${DEVICE_SNAPSHOT_PREFIX}${timestamp.replace(/[:.]/g, "-")}`;
   const serialized = safeSerialize(snapshot);
@@ -212,13 +217,18 @@ export function readDeviceSnapshots(storage = getBrowserStorage()) {
         continue;
       }
 
+      const normalizedData = normalizeLegacyData(data).data;
       snapshots.push({
+        collectionCounts: parsed.collectionCounts || countDataCollections(data),
         key,
         createdAt: parsed.createdAt || key.replace(DEVICE_SNAPSHOT_PREFIX, ""),
         data,
         deviceId: parsed.deviceId || "",
+        fingerprint:
+          parsed.fingerprint ||
+          fingerprintRecords(recordsFromData(normalizedData)),
         reason: parsed.reason || "",
-        recordCount: countDataItems(normalizeLegacyData(data).data),
+        recordCount: countDataItems(normalizedData),
         sizeBytes: rawValue?.length || 0,
       });
     }
@@ -233,6 +243,13 @@ export function readDeviceSnapshots(storage = getBrowserStorage()) {
 
 export function readLatestDeviceSnapshot(storage = getBrowserStorage()) {
   return findLatestBackupWithData(readDeviceSnapshots(storage));
+}
+
+export function readLatestPreImportDeviceSnapshot(storage = getBrowserStorage()) {
+  return (
+    readDeviceSnapshots(storage).find((snapshot) => snapshot.reason === "pre-import") ||
+    null
+  );
 }
 
 export function getBestLocalRecoveryData(options = {}) {
@@ -729,6 +746,22 @@ export function planBootstrapSync(options = {}) {
   };
 }
 
+export function planSupabaseFirstBootstrap(options = {}) {
+  const remoteRecords = options.remoteRecords || [];
+  const cacheRecords = options.cacheRecords || [];
+
+  return {
+    authoritativeRecords: remoteRecords,
+    cacheCount: countRecords(cacheRecords),
+    localImportIgnored: true,
+    remoteCount: countRecords(remoteRecords),
+    requiresExplicitImport: false,
+    shouldReplaceLocal: true,
+    shouldUploadLocal: false,
+    source: "remote",
+  };
+}
+
 export function createRemoteUserResetPlan(options = {}) {
   const userId = options.userId;
   const recordRows = options.recordRows || [];
@@ -823,18 +856,47 @@ export function applyChangedRecords(currentRecords, changedRecords) {
 }
 
 export function queueFromRecords(records, timestamp = nowIso()) {
+  return operationsFromRecords(records, timestamp);
+}
+
+export function operationsFromRecords(records, timestamp = nowIso()) {
   return records.map((record) => ({
     id: createId(),
     createdAt: timestamp,
     attempts: 0,
+    collection: record.collection,
     record,
+    recordId: record.id,
+    type: record.deleted_at ? "delete" : "upsert",
+    version: QUEUE_VERSION,
   }));
 }
 
-export function mergeQueuedRecords(existingQueue = [], records = [], timestamp = nowIso()) {
+export function normalizeSyncQueue(queue = []) {
+  return queue
+    .map((item) => {
+      if (!item?.record) {
+        return null;
+      }
+
+      return {
+        id: item.id || createId(),
+        createdAt: item.createdAt || nowIso(),
+        attempts: item.attempts || 0,
+        collection: item.collection || item.record.collection,
+        record: item.record,
+        recordId: item.recordId || item.record.id,
+        type: item.type || (item.record.deleted_at ? "delete" : "upsert"),
+        version: item.version || 1,
+      };
+    })
+    .filter(Boolean);
+}
+
+export function mergeQueuedOperations(existingQueue = [], operations = []) {
   const byKey = new Map(
-    existingQueue.map((item) => [
-      recordKey(item.record),
+    normalizeSyncQueue(existingQueue).map((item) => [
+      operationKey(item),
       {
         ...item,
         attempts: item.attempts || 0,
@@ -842,13 +904,17 @@ export function mergeQueuedRecords(existingQueue = [], records = [], timestamp =
     ]),
   );
 
-  for (const item of queueFromRecords(records, timestamp)) {
-    const key = recordKey(item.record);
+  for (const item of normalizeSyncQueue(operations)) {
+    const key = operationKey(item);
     const existing = byKey.get(key);
     byKey.set(key, existing ? { ...item, attempts: existing.attempts } : item);
   }
 
   return [...byKey.values()];
+}
+
+export function mergeQueuedRecords(existingQueue = [], records = [], timestamp = nowIso()) {
+  return mergeQueuedOperations(existingQueue, operationsFromRecords(records, timestamp));
 }
 
 export function serializeRecordForSupabase(record, userId) {
@@ -895,12 +961,55 @@ export function fingerprintRecords(records = []) {
   );
 }
 
+export function countDataCollections(data) {
+  if (!data || typeof data !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    COLLECTIONS.map((collection) => {
+      const value = data[collection.name];
+
+      if (collection.kind === "array" || collection.kind === "arrayValue") {
+        return [collection.name, Array.isArray(value) ? value.length : 0];
+      }
+
+      if (collection.kind === "objectMap") {
+        return [
+          collection.name,
+          value && typeof value === "object" && !Array.isArray(value)
+            ? Object.keys(value).length
+            : 0,
+        ];
+      }
+
+      return [
+        collection.name,
+        isMeaningfulSingleton(value, collection.fallback) ? 1 : 0,
+      ];
+    }),
+  );
+}
+
+export function createCachedKaizenData() {
+  const cachedRecords = readSyncCache().records || [];
+
+  if (countRecords(cachedRecords) > 0) {
+    return dataFromRecords(cachedRecords);
+  }
+
+  return createEmptyKaizenData();
+}
+
 export function summarizeDeviceSnapshots(storage = getBrowserStorage()) {
   return readDeviceSnapshots(storage).map((snapshot) => ({
+    collectionCounts: snapshot.collectionCounts,
     createdAt: snapshot.createdAt,
     deviceId: snapshot.deviceId,
+    fingerprint: snapshot.fingerprint,
     key: snapshot.key,
     recordCount: snapshot.recordCount,
+    reason: snapshot.reason,
     sizeBytes: snapshot.sizeBytes,
   }));
 }
@@ -1068,6 +1177,10 @@ function dedupeRecords(records) {
 
 function recordKey(record) {
   return `${record.collection}:${record.id}`;
+}
+
+function operationKey(operation) {
+  return `${operation.collection || operation.record?.collection}:${operation.recordId || operation.record?.id}`;
 }
 
 function recordsEqual(left, right) {

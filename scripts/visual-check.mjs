@@ -26,6 +26,54 @@ const fakeSession = {
 
 const seedScript = `
 localStorage.setItem('kaizen:v1:supabase:auth', ${JSON.stringify(JSON.stringify(fakeSession))});
+const visualCacheRecords = [
+  {
+    collection: 'inboxItems',
+    id: 'inbox-a',
+    data: { id: 'inbox-a', originalText: 'A da chiarire', clarifiedText: '', status: 'open', createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' },
+    created_at: '2026-08-15T09:00:00.000Z',
+    updated_at: '2026-08-15T09:00:00.000Z',
+    deleted_at: null,
+    version: 1
+  },
+  {
+    collection: 'nextActions',
+    id: 'next-a',
+    data: { id: 'next-a', title: 'Azione desktop/mobile', completed: false, order: 0, createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z', completedAt: null },
+    created_at: '2026-08-15T09:00:00.000Z',
+    updated_at: '2026-08-15T09:00:00.000Z',
+    deleted_at: null,
+    version: 1
+  },
+  {
+    collection: 'nextActions',
+    id: 'next-b',
+    data: { id: 'next-b', title: 'Azione completata', completed: true, order: 1, createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T10:00:00.000Z', completedAt: '2026-08-15T10:00:00.000Z' },
+    created_at: '2026-08-15T09:00:00.000Z',
+    updated_at: '2026-08-15T10:00:00.000Z',
+    deleted_at: null,
+    version: 1
+  },
+  {
+    collection: 'calendarItems',
+    id: 'event-a',
+    data: { id: 'event-a', title: 'Evento test', description: 'Verifica responsive', date: '2026-08-15', allDay: true, startTime: null, endTime: null, createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' },
+    created_at: '2026-08-15T09:00:00.000Z',
+    updated_at: '2026-08-15T09:00:00.000Z',
+    deleted_at: null,
+    version: 1
+  },
+  {
+    collection: 'projects',
+    id: 'project-a',
+    data: { id: 'project-a', title: 'Progetto test', createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' },
+    created_at: '2026-08-15T09:00:00.000Z',
+    updated_at: '2026-08-15T09:00:00.000Z',
+    deleted_at: null,
+    version: 1
+  }
+];
+localStorage.setItem('kaizen:v1:sync:cache', JSON.stringify({ savedAt: '2026-08-15T10:00:00.000Z', records: visualCacheRecords }));
 localStorage.setItem('kaizen:v1:gtd:inboxItems', JSON.stringify([
   { id: 'inbox-a', originalText: 'A da chiarire', clarifiedText: '', status: 'open', createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' }
 ]));
