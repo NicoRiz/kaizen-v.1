@@ -917,6 +917,52 @@ export function mergeQueuedRecords(existingQueue = [], records = [], timestamp =
   return mergeQueuedOperations(existingQueue, operationsFromRecords(records, timestamp));
 }
 
+export function removeFlushedOperations(queue = [], flushedOperations = []) {
+  const flushedIds = new Set(
+    normalizeSyncQueue(flushedOperations).map((item) => item.id),
+  );
+
+  return normalizeSyncQueue(queue).filter((item) => !flushedIds.has(item.id));
+}
+
+export async function flushQueuedOperations(options = {}) {
+  const getQueue = options.getQueue || (() => []);
+  const setQueue = options.setQueue || (() => {});
+  const sendBatch = options.sendBatch;
+
+  if (typeof sendBatch !== "function") {
+    throw new Error("flushQueuedOperations richiede sendBatch.");
+  }
+
+  let flushedCount = 0;
+
+  while (true) {
+    const batch = normalizeSyncQueue(getQueue());
+    setQueue(batch);
+
+    if (batch.length === 0) {
+      return {
+        flushedCount,
+        ok: true,
+      };
+    }
+
+    try {
+      await sendBatch(batch);
+    } catch (error) {
+      setQueue(normalizeSyncQueue(getQueue()));
+      return {
+        error,
+        flushedCount,
+        ok: false,
+      };
+    }
+
+    flushedCount += batch.length;
+    setQueue(removeFlushedOperations(getQueue(), batch));
+  }
+}
+
 export function serializeRecordForSupabase(record, userId) {
   return {
     user_id: userId,

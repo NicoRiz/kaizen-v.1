@@ -100,7 +100,9 @@ export default function App() {
     }
   }, [kaizenData, sync.trackCollectionChange]);
 
-  useEffect(() => writeStorage(STORAGE_KEYS.migration, migration), [migration]);
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.migration, migration);
+  }, [migration]);
 
   useEffect(() => {
     if (migration.legacyTasksToNextActions || legacyTasks.length === 0) {

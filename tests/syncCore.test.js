@@ -11,6 +11,7 @@ import {
   dataFromRecords,
   diffCollectionRecords,
   fingerprintRecords,
+  flushQueuedOperations,
   getBestLocalRecoveryData,
   getOrCreateDeviceId,
   mergeBootstrapRecords,
@@ -25,6 +26,7 @@ import {
   queueFromRecords,
   readDeviceSnapshots,
   recordsFromData,
+  removeFlushedOperations,
   validateMigrationResult,
 } from "../src/lib/syncCore.js";
 
@@ -37,6 +39,27 @@ function action(id, title, updatedAt = "2026-08-15T10:00:00.000Z") {
     createdAt: "2026-08-15T09:00:00.000Z",
     updatedAt,
     completedAt: null,
+  };
+}
+
+function project(id, title, updatedAt = "2026-08-15T10:00:00.000Z") {
+  return {
+    id,
+    title,
+    createdAt: "2026-08-15T09:00:00.000Z",
+    updatedAt,
+  };
+}
+
+function projectAction(
+  id,
+  projectId,
+  title,
+  updatedAt = "2026-08-15T10:00:00.000Z",
+) {
+  return {
+    ...action(id, title, updatedAt),
+    projectId,
   };
 }
 
@@ -734,6 +757,146 @@ test("Sync queue stores operations and deduplicates upsert/delete by record", ()
   assert.equal(normalized[0].type, "delete");
   assert.equal(normalized[0].collection, "nextActions");
   assert.equal(normalized[0].recordId, "queued-a");
+});
+
+test("Sync queue keeps a project action added while the project upsert is in flight", async () => {
+  const projectRecord = recordsFromData({
+    projects: [project("project-a", "Project A")],
+  }).find((record) => record.collection === "projects");
+  const actionRecord = recordsFromData({
+    projectActions: [projectAction("action-a", "project-a", "Action A")],
+  }).find((record) => record.collection === "projectActions");
+  let queue = mergeQueuedRecords([], [projectRecord], "2026-08-15T10:00:00.000Z");
+  const sent = [];
+
+  const result = await flushQueuedOperations({
+    getQueue: () => queue,
+    setQueue: (nextQueue) => {
+      queue = normalizeSyncQueue(nextQueue);
+    },
+    sendBatch: async (batch) => {
+      sent.push(batch.map((item) => item.record.collection));
+
+      if (sent.length === 1) {
+        queue = mergeQueuedRecords(
+          queue,
+          [actionRecord],
+          "2026-08-15T10:00:01.000Z",
+        );
+      }
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(queue.length, 0);
+  assert.deepEqual(sent, [["projects"], ["projectActions"]]);
+});
+
+test("Sync queue sends a second operation queued during an active flush", async () => {
+  const firstRecord = recordsFromData({
+    nextActions: [action("first", "First")],
+  }).find((record) => record.collection === "nextActions");
+  const secondRecord = recordsFromData({
+    waitingFor: [action("second", "Second")],
+  }).find((record) => record.collection === "waitingFor");
+  let queue = mergeQueuedRecords([], [firstRecord], "2026-08-15T10:00:00.000Z");
+  const sentIds = [];
+
+  const result = await flushQueuedOperations({
+    getQueue: () => queue,
+    setQueue: (nextQueue) => {
+      queue = normalizeSyncQueue(nextQueue);
+    },
+    sendBatch: async (batch) => {
+      sentIds.push(...batch.map((item) => item.record.id));
+
+      if (sentIds.length === 1) {
+        queue = mergeQueuedRecords(
+          queue,
+          [secondRecord],
+          "2026-08-15T10:00:01.000Z",
+        );
+      }
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(queue.length, 0);
+  assert.deepEqual(sentIds, ["first", "second"]);
+});
+
+test("Sync queue does not remove a newer operation for the same record when an older batch finishes", async () => {
+  const olderRecord = recordsFromData({
+    nextActions: [action("same", "Older title", "2026-08-15T10:00:00.000Z")],
+  }).find((record) => record.collection === "nextActions");
+  const newerRecord = recordsFromData({
+    nextActions: [action("same", "Newer title", "2026-08-15T10:00:02.000Z")],
+  }).find((record) => record.collection === "nextActions");
+  let queue = mergeQueuedRecords([], [olderRecord], "2026-08-15T10:00:00.000Z");
+  const sentTitles = [];
+
+  const result = await flushQueuedOperations({
+    getQueue: () => queue,
+    setQueue: (nextQueue) => {
+      queue = normalizeSyncQueue(nextQueue);
+    },
+    sendBatch: async (batch) => {
+      sentTitles.push(...batch.map((item) => item.record.data.title));
+
+      if (sentTitles.length === 1) {
+        queue = mergeQueuedRecords(
+          queue,
+          [newerRecord],
+          "2026-08-15T10:00:01.000Z",
+        );
+      }
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(queue.length, 0);
+  assert.deepEqual(sentTitles, ["Older title", "Newer title"]);
+});
+
+test("Sync queue preserves pending operations when the remote flush fails", async () => {
+  const pendingRecord = recordsFromData({
+    nextActions: [action("pending", "Pending")],
+  }).find((record) => record.collection === "nextActions");
+  let queue = mergeQueuedRecords([], [pendingRecord], "2026-08-15T10:00:00.000Z");
+  const originalOperationId = queue[0].id;
+
+  const result = await flushQueuedOperations({
+    getQueue: () => queue,
+    setQueue: (nextQueue) => {
+      queue = normalizeSyncQueue(nextQueue);
+    },
+    sendBatch: async () => {
+      throw new Error("Supabase unavailable");
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error.message, /Supabase unavailable/);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].id, originalOperationId);
+  assert.equal(queue[0].record.id, "pending");
+});
+
+test("Sync queue removes only flushed operation ids, not later replacements for the same record", () => {
+  const olderRecord = recordsFromData({
+    nextActions: [action("same", "Older title", "2026-08-15T10:00:00.000Z")],
+  }).find((record) => record.collection === "nextActions");
+  const newerRecord = recordsFromData({
+    nextActions: [action("same", "Newer title", "2026-08-15T10:00:01.000Z")],
+  }).find((record) => record.collection === "nextActions");
+  let queue = mergeQueuedRecords([], [olderRecord], "2026-08-15T10:00:00.000Z");
+  const flushedBatch = normalizeSyncQueue(queue);
+  queue = mergeQueuedRecords(queue, [newerRecord], "2026-08-15T10:00:01.000Z");
+
+  const remaining = removeFlushedOperations(queue, flushedBatch);
+
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].record.data.title, "Newer title");
 });
 
 test("Duplicate analysis is read-only and estimates duplicate groups", () => {

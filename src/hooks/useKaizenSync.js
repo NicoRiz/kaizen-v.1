@@ -14,6 +14,7 @@ import {
   deserializeRecordFromSupabase,
   diffCollectionRecords,
   fingerprintRecords,
+  flushQueuedOperations,
   getBestLocalRecoveryData,
   getOrCreateDeviceId,
   mergeBootstrapRecords,
@@ -298,40 +299,64 @@ export function useKaizenSync({ data, onReplaceData }) {
       setStatus(STATUS.syncing);
 
       try {
-        const rows = queue.map((item) =>
-          serializeRecordForSupabase(item.record, user.id),
-        );
+        while (true) {
+          const result = await flushQueuedOperations({
+            getQueue: () => queueRef.current,
+            setQueue: (nextQueue) => {
+              queueRef.current = normalizeSyncQueue(nextQueue);
+              writeSyncQueue(queueRef.current);
+              setDiagnostics((current) => ({
+                ...current,
+                cacheCount: countRecords(recordsRef.current),
+                queueCount: queueRef.current.length,
+                remoteCount: countRecords(recordsRef.current),
+              }));
+            },
+            sendBatch: async (batch) => {
+              const rows = batch.map((item) =>
+                serializeRecordForSupabase(item.record, user.id),
+              );
 
-        if (rows.length > 0) {
-          const { error } = await supabase
-            .from("kaizen_records")
-            .upsert(rows, { onConflict: "user_id,collection,id" });
+              if (rows.length === 0) {
+                return;
+              }
 
-          if (error) {
-            throw error;
+              const { error } = await supabase
+                .from("kaizen_records")
+                .upsert(rows, { onConflict: "user_id,collection,id" });
+
+              if (error) {
+                throw error;
+              }
+            },
+          });
+
+          if (!result.ok) {
+            throw result.error;
+          }
+
+          if (result.flushedCount === 0) {
+            break;
+          }
+
+          const timestamp = new Date().toISOString();
+          setLastSuccessfulSyncAt(timestamp);
+          markDeviceMigrationCompleted({
+            completedAt: timestamp,
+            lastSuccessfulSyncAt: timestamp,
+          });
+          await supabase.from("kaizen_sync_state").upsert({
+            user_id: user.id,
+            migration_version: MIGRATION_VERSION,
+            migration_completed_at: readSyncMeta().migrationCompletedAt || timestamp,
+            last_successful_sync_at: timestamp,
+          });
+
+          if (normalizeSyncQueue(queueRef.current).length === 0) {
+            break;
           }
         }
 
-        queueRef.current = [];
-        writeSyncQueue([]);
-        setDiagnostics((current) => ({
-          ...current,
-          cacheCount: countRecords(recordsRef.current),
-          queueCount: 0,
-          remoteCount: countRecords(recordsRef.current),
-        }));
-        const timestamp = new Date().toISOString();
-        setLastSuccessfulSyncAt(timestamp);
-        markDeviceMigrationCompleted({
-          completedAt: timestamp,
-          lastSuccessfulSyncAt: timestamp,
-        });
-        await supabase.from("kaizen_sync_state").upsert({
-          user_id: user.id,
-          migration_version: MIGRATION_VERSION,
-          migration_completed_at: readSyncMeta().migrationCompletedAt || timestamp,
-          last_successful_sync_at: timestamp,
-        });
         setStatus(STATUS.synced);
         setMessage("");
         return true;
