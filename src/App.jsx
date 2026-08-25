@@ -251,7 +251,7 @@ export default function App() {
     return project;
   }
 
-  function clarifyInboxItem(itemId, result) {
+  async function clarifyInboxItem(itemId, result) {
     const timestamp = nowIso();
     const clarifiedText = result.clarifiedText.trim();
 
@@ -346,15 +346,20 @@ export default function App() {
       }
 
       if (result.nonActionableDestination === "archive") {
+        const archiveItemId = createId();
+        const attachments = result.attachments?.length
+          ? await sync.uploadArchiveAttachments(archiveItemId, result.attachments)
+          : [];
         updateCollection("archiveItems", (currentItems) => [
           {
-            id: createId(),
+            id: archiveItemId,
             title: clarifiedText,
             content: result.description.trim() || clarifiedText,
             createdAt: timestamp,
             updatedAt: timestamp,
             archivedAt: timestamp,
             sourceInboxItemId: itemId,
+            attachments,
           },
           ...currentItems,
         ]);
@@ -598,7 +603,9 @@ export default function App() {
     });
   }
 
-  function deleteArchiveItem(itemId) {
+  async function deleteArchiveItem(itemId) {
+    const item = archiveItems.find((archiveItem) => archiveItem.id === itemId);
+    await sync.deleteArchiveAttachments(item?.attachments);
     updateCollection("archiveItems", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
@@ -634,6 +641,7 @@ export default function App() {
           activeSection={activeSection}
           archiveItems={archiveItems}
           onDeleteArchiveItem={deleteArchiveItem}
+          onDownloadArchiveAttachment={sync.downloadArchiveAttachment}
           onDeleteProject={deleteProject}
           onDeleteSomedayMaybe={deleteSomedayMaybe}
           onDeleteWaitingFor={deleteWaitingFor}
