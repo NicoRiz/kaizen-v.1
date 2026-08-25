@@ -1056,6 +1056,64 @@ export function useKaizenSync({ data, onReplaceData }) {
     };
   }
 
+  async function uploadArchiveAttachments(archiveItemId, files) {
+    if (!canUseCloud) {
+      throw new Error("Accedi a Kaizen per sincronizzare gli allegati.");
+    }
+
+    const uploaded = [];
+    try {
+      for (const file of files) {
+        const attachmentId = crypto.randomUUID();
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, "-");
+        const path = `${user.id}/${archiveItemId}/${attachmentId}-${safeName}`;
+        const { error } = await supabase.storage
+          .from("archive-attachments")
+          .upload(path, file, { contentType: file.type || "application/octet-stream" });
+
+        if (error) throw error;
+        uploaded.push({
+          id: attachmentId,
+          name: file.name,
+          path,
+          size: file.size,
+          type: file.type || "application/octet-stream",
+          uploadedAt: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      if (uploaded.length > 0) {
+        await supabase.storage
+          .from("archive-attachments")
+          .remove(uploaded.map((attachment) => attachment.path));
+      }
+      throw error;
+    }
+    return uploaded;
+  }
+
+  async function downloadArchiveAttachment(attachment) {
+    if (!canUseCloud) throw new Error("Accedi a Kaizen per aprire l'allegato.");
+    const { data: blob, error } = await supabase.storage
+      .from("archive-attachments")
+      .download(attachment.path);
+    if (error) throw error;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = attachment.name;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function deleteArchiveAttachments(attachments = []) {
+    if (!canUseCloud || attachments.length === 0) return;
+    const { error } = await supabase.storage
+      .from("archive-attachments")
+      .remove(attachments.map((attachment) => attachment.path));
+    if (error) throw error;
+  }
+
   const sync = useMemo(
     () => ({
       authError,
@@ -1074,6 +1132,8 @@ export function useKaizenSync({ data, onReplaceData }) {
       message,
       migrationInfo,
       diagnostics,
+      deleteArchiveAttachments,
+      downloadArchiveAttachment,
       pendingCount: queueRef.current.length,
       replaceLocalDataWithAccount,
       setLocalCloudImportDisabled,
@@ -1081,6 +1141,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       signOut,
       status,
       trackCollectionChange,
+      uploadArchiveAttachments,
       user,
     }),
     [
