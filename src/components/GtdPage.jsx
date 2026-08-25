@@ -23,6 +23,7 @@ function BasicItemModal({
   onSubmit,
   titleLabel = "Titolo",
   bodyLabel = "Descrizione",
+  onDownloadAttachment,
 }) {
   const [title, setTitle] = useState(item?.title || "");
   const [body, setBody] = useState(item?.description || item?.content || "");
@@ -72,6 +73,17 @@ function BasicItemModal({
               value={title}
             />
           </label>
+          {item?.attachments?.length > 0 && (
+            <div className="attachment-list">
+              <strong>Allegati</strong>
+              {item.attachments.map((attachment) => (
+                <button key={attachment.id} onClick={() => onDownloadAttachment(attachment)} type="button">
+                  <span>{attachment.name}</span>
+                  <small>{Math.max(1, Math.round(attachment.size / 1024))} KB · Scarica</small>
+                </button>
+              ))}
+            </div>
+          )}
           <label>
             {bodyLabel}
             <textarea
@@ -444,6 +456,7 @@ function EditableList({
   onDelete,
   onSave,
   searchable = false,
+  onDownloadAttachment,
 }) {
   const [editingItem, setEditingItem] = useState(null);
   const [search, setSearch] = useState("");
@@ -513,6 +526,7 @@ function EditableList({
             onSave(itemInput);
             setEditingItem(null);
           }}
+          onDownloadAttachment={onDownloadAttachment}
         />
       )}
     </section>
@@ -523,6 +537,7 @@ export default function GtdPage({
   activeSection,
   archiveItems,
   onDeleteArchiveItem,
+  onDownloadArchiveAttachment,
   onDeleteProject,
   onDeleteSomedayMaybe,
   onDeleteWaitingFor,
@@ -601,6 +616,7 @@ export default function GtdPage({
               bodyLabel="Contenuto"
               emptyMessage="Archivio vuoto."
               items={archiveItems}
+              onDownloadAttachment={onDownloadArchiveAttachment}
               modalTitle="Archivio"
               onDelete={onDeleteArchiveItem}
               onSave={onSaveArchiveItem}
