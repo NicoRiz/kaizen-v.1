@@ -218,8 +218,8 @@ export default function Home({
         <ClarifyInboxModal
           item={clarifyingItem}
           onClose={() => setClarifyingItem(null)}
-          onSubmit={(result) => {
-            onClarifyInboxItem(clarifyingItem.id, result);
+          onSubmit={async (result) => {
+            await onClarifyInboxItem(clarifyingItem.id, result);
             setClarifyingItem(null);
           }}
           projects={projects}
