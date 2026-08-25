@@ -34,6 +34,9 @@ export default function ClarifyInboxModal({
   const [date, setDate] = useState(today);
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
+  const [attachments, setAttachments] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const needsProject = destination === "projects";
   const canSubmit = useMemo(() => {
@@ -70,14 +73,17 @@ export default function ClarifyInboxModal({
     projectId,
   ]);
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
 
     if (!canSubmit) {
       return;
     }
 
-    onSubmit({
+    setIsSaving(true);
+    setSaveError("");
+    try {
+      await onSubmit({
       actionable: actionable === "yes",
       clarifiedText,
       date,
@@ -89,7 +95,12 @@ export default function ClarifyInboxModal({
       nonActionableDestination,
       projectId,
       startTime,
+      attachments,
     });
+    } catch (error) {
+      setSaveError(error.message || "Impossibile salvare gli allegati.");
+      setIsSaving(false);
+    }
   }
 
   return (
@@ -290,15 +301,33 @@ export default function ClarifyInboxModal({
                   />
                 </label>
               )}
+              {nonActionableDestination === "archive" && (
+                <label className="attachment-picker">
+                  Allegati
+                  <input
+                    multiple
+                    onChange={(event) => setAttachments(Array.from(event.target.files || []))}
+                    type="file"
+                  />
+                  <span>Puoi selezionare file di qualsiasi tipo.</span>
+                  {attachments.length > 0 && (
+                    <ul>
+                      {attachments.map((file) => <li key={`${file.name}-${file.size}`}>{file.name}</li>)}
+                    </ul>
+                  )}
+                </label>
+              )}
             </>
           )}
+
+          {saveError && <p className="form-error" role="alert">{saveError}</p>}
 
           <div className="modal-actions">
             <button className="secondary-button" onClick={onClose} type="button">
               Annulla
             </button>
-            <button className="submit-button" disabled={!canSubmit} type="submit">
-              Salva
+            <button className="submit-button" disabled={!canSubmit || isSaving} type="submit">
+              {isSaving ? "Caricamento..." : "Salva"}
             </button>
           </div>
         </form>
