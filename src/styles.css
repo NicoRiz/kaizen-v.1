@@ -1087,6 +1087,47 @@ h2 {
   min-height: 96px;
 }
 
+.attachment-picker span,
+.attachment-list small {
+  color: #7d716e;
+  font-size: 0.78rem;
+}
+
+.attachment-picker ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.86rem;
+}
+
+.attachment-list {
+  display: grid;
+  gap: 8px;
+}
+
+.attachment-list > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e2d8d0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fffdfa;
+  color: #2c2122;
+  text-align: left;
+}
+
+.attachment-list span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.form-error {
+  margin: 0;
+  color: #9f2345;
+  font-weight: 700;
+}
+
 .tab-list {
   margin-bottom: 16px;
 }
