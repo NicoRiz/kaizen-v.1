@@ -1,6 +1,6 @@
 import BottomNav from "./BottomNav.jsx";
 
-const SECTION_ORDER = ["knowledge", "skills", "sharkmo", "oneiros"];
+const SECTION_ORDER = ["oneiros", "journal"];
 
 export default function NotesHub({
   activeSection,
@@ -23,7 +23,7 @@ export default function NotesHub({
           <div className="section-heading">
             <div>
               <p className="eyebrow">Sezioni</p>
-              <h2>Knowledge, Skills, Sharkmo, Oneiros</h2>
+              <h2>Oneiros e Journal</h2>
             </div>
           </div>
 

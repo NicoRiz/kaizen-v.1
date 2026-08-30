@@ -48,10 +48,6 @@ export default function ClarifyInboxModal({
       return Boolean(nonActionableDestination);
     }
 
-    if (!nextActionTitle.trim()) {
-      return false;
-    }
-
     if (needsProject && !projectId && !newProjectTitle.trim()) {
       return false;
     }
@@ -68,7 +64,6 @@ export default function ClarifyInboxModal({
     destination,
     needsProject,
     newProjectTitle,
-    nextActionTitle,
     nonActionableDestination,
     projectId,
   ]);
@@ -199,7 +194,7 @@ export default function ClarifyInboxModal({
                 Qual e' la prossima azione?
                 <input
                   onChange={(event) => setNextActionTitle(event.target.value)}
-                  required
+                  placeholder="Facoltativa: se vuota useremo il nome dell'elemento"
                   type="text"
                   value={nextActionTitle}
                 />

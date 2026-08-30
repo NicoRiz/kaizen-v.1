@@ -22,23 +22,11 @@ const PRIMARY_SECTIONS = {
 };
 
 const NOTE_SECTIONS = {
-  knowledge: {
-    key: "knowledge",
-    title: "Knowledge",
-    eyebrow: "Biblioteca",
-    emptyMessage: "Nessuna nota salvata in Knowledge.",
-  },
-  skills: {
-    key: "skills",
-    title: "Skills",
-    eyebrow: "Crescita",
-    emptyMessage: "Nessuna nota salvata in Skills.",
-  },
-  sharkmo: {
-    key: "sharkmo",
-    title: "Sharkmo",
-    eyebrow: "Progetto",
-    emptyMessage: "Nessuna nota salvata in Sharkmo.",
+  journal: {
+    key: "journal",
+    title: "Journal",
+    eyebrow: "Riflessioni",
+    emptyMessage: "Nessuna nota salvata nel Journal.",
   },
   oneiros: {
     key: "oneiros",
@@ -254,14 +242,17 @@ export default function App() {
   async function clarifyInboxItem(itemId, result) {
     const timestamp = nowIso();
     const clarifiedText = result.clarifiedText.trim();
+    const inboxItemTitle =
+      inboxItems.find((item) => item.id === itemId)?.originalText?.trim() ||
+      clarifiedText;
 
     if (result.actionable) {
-      const nextActionTitle = result.nextActionTitle.trim();
+      const nextActionTitle = result.nextActionTitle.trim() || inboxItemTitle;
 
       if (result.destination === "projects") {
         const projectId = result.projectId || createProject(result.newProjectTitle)?.id;
 
-        if (!projectId || !nextActionTitle) {
+        if (!projectId) {
           return;
         }
 
@@ -282,7 +273,7 @@ export default function App() {
         ]);
       }
 
-      if (result.destination === "next-actions" && nextActionTitle) {
+      if (result.destination === "next-actions") {
         updateCollection("nextActions", (currentActions) => [
           ...currentActions,
           {

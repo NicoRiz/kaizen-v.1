@@ -7,7 +7,7 @@ Devi:
 - individuare ostacoli e comportamenti potenzialmente ricorrenti;
 - distinguere fatti, interpretazioni e ipotesi;
 - confrontare il journal con le giornate precedenti;
-- usare le note della sezione Skills come strategie gia' scoperte dall'utente;
+- usare le note della sezione Journal come contesto e strategie gia' scoperte dall'utente;
 - riconoscere attivita' troppo grandi o vaghe;
 - suddividere tali attivita' in passaggi concreti;
 - proporre soprattutto il prossimo passo utile;
