@@ -170,8 +170,36 @@ async function capture(page, viewport, name) {
     format: "png",
   });
 
+  const routeChecks = await page.send("Runtime.evaluate", {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `(async () => {
+      const results = [];
+      const pause = () => new Promise((resolve) => setTimeout(resolve, 80));
+      const record = (name) => results.push({
+        name,
+        overflowX: document.documentElement.scrollWidth > window.innerWidth,
+        dialogCount: document.querySelectorAll('[role="dialog"]').length,
+        heading: document.querySelector('main h1')?.textContent || ''
+      });
+      for (const navLabel of ['Sistema', 'Oggi', 'Journal']) {
+        [...document.querySelectorAll('.bottom-nav-link')].find((button) => button.textContent.trim() === navLabel)?.click();
+        await pause();
+        record(navLabel);
+        if (navLabel !== 'Oggi') {
+          for (const button of document.querySelectorAll('.section-tabs button')) {
+            button.click();
+            await pause();
+            record(navLabel + ':' + button.textContent.trim());
+          }
+        }
+      }
+      return results;
+    })()`,
+  });
+
   await writeFile(join(OUT_DIR, `visual-${name}.png`), Buffer.from(screenshot.data, "base64"));
-  return metrics.result.value;
+  return { ...metrics.result.value, routeChecks: routeChecks.result.value };
 }
 
 const profileDir = join(tmpdir(), `kaizen-visual-${Date.now()}`);
@@ -220,15 +248,15 @@ try {
 }
 
 function assertVisualResult(result, name) {
-  if (!result.text.includes("KAIZEN")) {
-    throw new Error(`${name}: KAIZEN shell not rendered`);
+  if (!result.text.includes("Oggi")) {
+    throw new Error(`${name}: Kaizen Loop shell not rendered`);
   }
 
   if (result.overflowX) {
     throw new Error(`${name}: horizontal overflow detected`);
   }
 
-  for (const item of ["GTD", "Home", "Note"]) {
+  for (const item of ["Sistema", "Oggi", "Journal"]) {
     if (!result.navItems.includes(item)) {
       throw new Error(`${name}: missing nav item ${item}`);
     }
@@ -236,5 +264,14 @@ function assertVisualResult(result, name) {
 
   if (!result.syncStatus) {
     throw new Error(`${name}: missing sync status`);
+  }
+
+  for (const route of result.routeChecks || []) {
+    if (route.overflowX) {
+      throw new Error(`${name}: horizontal overflow detected in ${route.name}`);
+    }
+    if (!route.heading) {
+      throw new Error(`${name}: missing page heading in ${route.name}`);
+    }
   }
 }

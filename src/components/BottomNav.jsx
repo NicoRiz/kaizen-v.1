@@ -1,19 +1,19 @@
 const NAV_ITEMS = [
   {
-    key: "gtd",
-    label: "GTD",
+    key: "system",
+    label: "Sistema",
   },
   {
-    key: "home",
-    label: "Home",
+    key: "today",
+    label: "Oggi",
   },
   {
-    key: "note",
-    label: "Note",
+    key: "journal",
+    label: "Journal",
   },
 ];
 
-export default function BottomNav({ activeSection = "home", onNavigate }) {
+export default function BottomNav({ activeSection = "today", onNavigate }) {
   return (
     <nav className="bottom-nav" aria-label="Navigazione principale">
       <div className="bottom-nav-inner">

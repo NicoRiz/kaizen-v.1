@@ -18,6 +18,12 @@ export const STORAGE_KEYS = {
   waitingFor: "kaizen:v1:gtd:waitingFor",
   somedayMaybe: "kaizen:v1:gtd:somedayMaybe",
   archiveItems: "kaizen:v1:gtd:archiveItems",
+  dailyPlans: "kaizen:loop:dailyPlans",
+  journalEntries: "kaizen:loop:journalEntries",
+  experiments: "kaizen:loop:experiments",
+  agentInsights: "kaizen:loop:agentInsights",
+  weeklyReviews: "kaizen:loop:weeklyReviews",
+  personalStrategies: "kaizen:loop:personalStrategies",
   migration: "kaizen:v1:gtd:migration",
   syncCache: "kaizen:v1:sync:cache",
   syncQueue: "kaizen:v1:sync:queue",
@@ -25,7 +31,7 @@ export const STORAGE_KEYS = {
   deviceId: "kaizen:v1:deviceId",
 };
 
-export const MIGRATION_VERSION = 1;
+export const MIGRATION_VERSION = 2;
 
 export const COLLECTIONS = [
   { name: "legacyTasks", storageKey: STORAGE_KEYS.legacyTasks, kind: "array", fallback: [] },
@@ -107,6 +113,37 @@ export const COLLECTIONS = [
   {
     name: "archiveItems",
     storageKey: STORAGE_KEYS.archiveItems,
+    kind: "array",
+    fallback: [],
+  },
+  { name: "dailyPlans", storageKey: STORAGE_KEYS.dailyPlans, kind: "array", fallback: [] },
+  {
+    name: "journalEntries",
+    storageKey: STORAGE_KEYS.journalEntries,
+    kind: "array",
+    fallback: [],
+  },
+  {
+    name: "experiments",
+    storageKey: STORAGE_KEYS.experiments,
+    kind: "array",
+    fallback: [],
+  },
+  {
+    name: "agentInsights",
+    storageKey: STORAGE_KEYS.agentInsights,
+    kind: "array",
+    fallback: [],
+  },
+  {
+    name: "weeklyReviews",
+    storageKey: STORAGE_KEYS.weeklyReviews,
+    kind: "array",
+    fallback: [],
+  },
+  {
+    name: "personalStrategies",
+    storageKey: STORAGE_KEYS.personalStrategies,
     kind: "array",
     fallback: [],
   },
