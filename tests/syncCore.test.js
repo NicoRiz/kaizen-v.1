@@ -5,6 +5,7 @@ import {
   analyzeDuplicateRecords,
   clearLocalKaizenDataForAccount,
   countRecords,
+  createCachedKaizenData,
   createDuplicateRemovalPlan,
   createDeviceSnapshot,
   createRemoteUserResetPlan,
@@ -115,6 +116,39 @@ function makeQuotaStorage(entries, options = {}) {
     },
   };
 }
+
+test("Local-only startup hydrates saved legacy collections when sync cache is empty", () => {
+  const storage = makeStorage({
+    "kaizen:v1:gtd:nextActions": JSON.stringify([
+      action("local-next", "Persisted Next Action"),
+    ]),
+    "kaizen:v1:gtd:calendarItems": JSON.stringify([
+      {
+        id: "local-calendar",
+        title: "Persisted schedule",
+        date: "2026-09-06",
+        sourceTaskId: "local-next",
+        sourceCollection: "nextActions",
+        createdAt: "2026-09-06T08:00:00.000Z",
+        updatedAt: "2026-09-06T08:00:00.000Z",
+      },
+    ]),
+  });
+  const previousWindow = globalThis.window;
+  globalThis.window = { localStorage: storage };
+
+  try {
+    const data = createCachedKaizenData();
+    assert.equal(data.nextActions[0].id, "local-next");
+    assert.equal(data.calendarItems[0].sourceTaskId, "local-next");
+  } finally {
+    if (previousWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = previousWindow;
+    }
+  }
+});
 
 test("Scenario A: PC A B C and empty Supabase keeps A B C", () => {
   const local = recordsFromData({

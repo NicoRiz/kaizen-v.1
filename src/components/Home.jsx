@@ -2,6 +2,11 @@ import { useMemo, useState } from "react";
 import BottomNav from "./BottomNav.jsx";
 import CalendarPanel from "./CalendarPanel.jsx";
 import ClarifyInboxModal from "./ClarifyInboxModal.jsx";
+import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
+import {
+  createTaskDragPayload,
+  TASK_DRAG_TYPE,
+} from "../lib/calendarScheduling.js";
 import { formatDisplayDate } from "../utils/date.js";
 
 function inboxCounterLabel(count) {
@@ -23,12 +28,14 @@ export default function Home({
   onDeleteCalendarItem,
   onNavigate,
   onSaveCalendarItem,
+  onScheduleTask,
   onToggleNextAction,
   projects,
 }) {
   const [captureText, setCaptureText] = useState("");
   const [clarifyingItem, setClarifyingItem] = useState(null);
   const [showCompletedActions, setShowCompletedActions] = useState(false);
+  const [schedulingTask, setSchedulingTask] = useState(null);
   const openInboxItems = useMemo(
     () => inboxItems.filter((item) => item.status === "open"),
     [inboxItems],
@@ -72,6 +79,7 @@ export default function Home({
           items={calendarItems}
           onDeleteItem={onDeleteCalendarItem}
           onSaveItem={onSaveCalendarItem}
+          onScheduleTask={onScheduleTask}
           today={date}
         />
 
@@ -145,7 +153,18 @@ export default function Home({
           ) : (
             <ul className="task-list">
               {activeNextActions.map((action) => (
-                <li className="task-item next-action-item" key={action.id}>
+                <li
+                  className="task-item next-action-item schedulable-task"
+                  draggable
+                  key={action.id}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "copy";
+                    event.dataTransfer.setData(
+                      TASK_DRAG_TYPE,
+                      createTaskDragPayload(action, "nextActions"),
+                    );
+                  }}
+                >
                   <label className="task-check">
                     <input
                       checked={action.completed}
@@ -157,6 +176,22 @@ export default function Home({
                   <div className="task-content">
                     <strong>{action.title}</strong>
                   </div>
+                  <button
+                    aria-label={`Pianifica ${action.title} nel calendario`}
+                    className="secondary-button schedule-button"
+                    onClick={() =>
+                      setSchedulingTask({
+                        sourceCollection: "nextActions",
+                        sourceProjectId: action.projectId || null,
+                        sourceTaskId: action.id,
+                        title: action.title,
+                        description: action.description || action.clarifiedText || "",
+                      })
+                    }
+                    type="button"
+                  >
+                    Calendario
+                  </button>
                 </li>
               ))}
             </ul>
@@ -224,6 +259,18 @@ export default function Home({
           }}
           projects={projects}
           today={date}
+        />
+      )}
+
+      {schedulingTask && (
+        <ScheduleTaskModal
+          initialDate={date}
+          onClose={() => setSchedulingTask(null)}
+          onSubmit={(schedule) => {
+            onScheduleTask(schedulingTask, schedule);
+            setSchedulingTask(null);
+          }}
+          sourceTask={schedulingTask}
         />
       )}
     </div>

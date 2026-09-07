@@ -1038,13 +1038,19 @@ export function countDataCollections(data) {
 }
 
 export function createCachedKaizenData() {
+  const localData = normalizeLegacyData(readLegacyData()).data;
+
+  if (countDataItems(localData) > 0) {
+    return localData;
+  }
+
   const cachedRecords = readSyncCache().records || [];
 
   if (countRecords(cachedRecords) > 0) {
     return dataFromRecords(cachedRecords);
   }
 
-  return createEmptyKaizenData();
+  return localData;
 }
 
 export function summarizeDeviceSnapshots(storage = getBrowserStorage()) {

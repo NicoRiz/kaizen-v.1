@@ -14,6 +14,10 @@ import {
 } from "./lib/syncCore.js";
 import { dateKey } from "./utils/date.js";
 import { readStorage, writeStorage } from "./utils/storage.js";
+import {
+  createScheduledCalendarItem,
+  updateCalendarItemInCollection,
+} from "./lib/calendarScheduling.js";
 
 const PRIMARY_SECTIONS = {
   gtd: "gtd",
@@ -393,19 +397,10 @@ export default function App() {
 
     updateCollection("calendarItems", (currentItems) => {
       if (itemInput.id) {
-        return currentItems.map((item) =>
-          item.id === itemInput.id
-            ? {
-                ...item,
-                title: cleanTitle,
-                description: itemInput.description.trim(),
-                date: itemInput.date,
-                allDay: !itemInput.startTime,
-                startTime: itemInput.startTime || null,
-                endTime: itemInput.endTime || null,
-                updatedAt: timestamp,
-              }
-            : item,
+        return updateCalendarItemInCollection(
+          currentItems,
+          { ...itemInput, title: cleanTitle },
+          timestamp,
         );
       }
 
@@ -424,6 +419,25 @@ export default function App() {
         },
       ];
     });
+  }
+
+  function scheduleTaskInCalendar(sourceTask, schedule) {
+    const timestamp = nowIso();
+    const calendarItem = createScheduledCalendarItem({
+      id: createId(),
+      sourceTask,
+      schedule,
+      timestamp,
+    });
+
+    if (!calendarItem) {
+      return;
+    }
+
+    updateCollection("calendarItems", (currentItems) => [
+      ...currentItems,
+      calendarItem,
+    ]);
   }
 
   function deleteCalendarItem(itemId) {
@@ -639,6 +653,7 @@ export default function App() {
           onNavigate={navigate}
           onSaveArchiveItem={saveArchiveItem}
           onSaveProjectActions={saveProjectActions}
+          onScheduleTask={scheduleTaskInCalendar}
           onSaveSomedayMaybe={saveSomedayMaybe}
           onSaveWaitingFor={saveWaitingFor}
           onUpdateProject={updateProject}
@@ -646,6 +661,7 @@ export default function App() {
           projects={projects}
           somedayMaybe={somedayMaybe}
           waitingFor={waitingFor}
+          today={today}
         />
       </>
     );
@@ -704,6 +720,7 @@ export default function App() {
         onClarifyInboxItem={clarifyInboxItem}
         onNavigate={navigate}
         onSaveCalendarItem={saveCalendarItem}
+        onScheduleTask={scheduleTaskInCalendar}
         onDeleteCalendarItem={deleteCalendarItem}
         onToggleNextAction={toggleNextAction}
         projects={projects}

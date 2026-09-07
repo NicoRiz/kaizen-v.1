@@ -484,6 +484,25 @@ h2 {
     transform 160ms ease;
 }
 
+.schedulable-task {
+  cursor: grab;
+}
+
+.schedulable-task:active {
+  cursor: grabbing;
+}
+
+.schedule-button {
+  grid-column: 2;
+  justify-self: start;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #741b34;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
 .task-item.is-completed {
   border-color: rgba(74, 127, 98, 0.35);
   opacity: 0.74;
@@ -1004,6 +1023,12 @@ h2 {
   box-shadow: inset 4px 0 0 rgba(116, 27, 52, 0.72);
 }
 
+.calendar-day.is-drop-target {
+  border-color: #741b34;
+  background: #fff1eb;
+  box-shadow: 0 0 0 3px rgba(116, 27, 52, 0.12);
+}
+
 .calendar-day-heading {
   display: flex;
   align-items: center;
@@ -1255,6 +1280,26 @@ h2 {
   border-color: #8f2e29;
   background: #8f2e29;
   color: #fff;
+}
+
+.schedule-source-summary {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid #ece3dc;
+  border-radius: 12px;
+  background: #fff8f4;
+}
+
+.schedule-source-summary strong {
+  color: #2c2122;
+}
+
+.schedule-source-summary span,
+.schedule-source-summary small {
+  color: #746967;
+  font-size: 0.78rem;
 }
 
 .note-hub-grid {
@@ -1749,6 +1794,11 @@ h2 {
   .task-item {
     grid-template-columns: 30px minmax(0, 1fr) auto;
     min-height: 72px;
+  }
+
+  .schedule-button {
+    grid-column: auto;
+    justify-self: end;
   }
 
   .calendar-grid--week,

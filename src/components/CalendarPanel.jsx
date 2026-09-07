@@ -1,5 +1,11 @@
 import { useMemo, useState } from "react";
 import { addDays, dateKey, parseDateKey } from "../utils/date.js";
+import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
+import {
+  CALENDAR_ITEM_DRAG_TYPE,
+  parseTaskDragPayload,
+  TASK_DRAG_TYPE,
+} from "../lib/calendarScheduling.js";
 
 function formatDayLabel(value) {
   return new Intl.DateTimeFormat("it-IT", {
@@ -203,11 +209,19 @@ function EventModal({ item, onClose, onDelete, onSubmit, today }) {
   );
 }
 
-export default function CalendarPanel({ items, onDeleteItem, onSaveItem, today }) {
+export default function CalendarPanel({
+  items,
+  onDeleteItem,
+  onSaveItem,
+  onScheduleTask,
+  today,
+}) {
   const [view, setView] = useState("week");
   const [cursorDate, setCursorDate] = useState(today);
   const [editingItem, setEditingItem] = useState(null);
   const [isCreatingItem, setIsCreatingItem] = useState(false);
+  const [dropTargetDate, setDropTargetDate] = useState(null);
+  const [pendingTaskSchedule, setPendingTaskSchedule] = useState(null);
   const days = useMemo(() => {
     if (view === "month") {
       return getMonthDays(cursorDate);
@@ -217,12 +231,49 @@ export default function CalendarPanel({ items, onDeleteItem, onSaveItem, today }
     return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   }, [cursorDate, view]);
   const sortedItems = useMemo(() => sortItems(items), [items]);
-  const periodTitle = view === "week" ? formatWeekTitle(days) : formatMonthTitle(cursorDate);
+  const periodTitle =
+    view === "week" ? formatWeekTitle(days) : formatMonthTitle(cursorDate);
 
   function moveCursor(direction) {
     setCursorDate((currentDate) =>
       view === "week" ? addDays(currentDate, direction * 7) : addMonths(currentDate, direction),
     );
+  }
+
+  function handleDayDragOver(event, day) {
+    const acceptedTypes = [TASK_DRAG_TYPE, CALENDAR_ITEM_DRAG_TYPE];
+    const dragTypes = Array.from(event.dataTransfer.types || []);
+
+    if (!acceptedTypes.some((type) => dragTypes.includes(type))) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = dragTypes.includes(TASK_DRAG_TYPE)
+      ? "copy"
+      : "move";
+    setDropTargetDate(day);
+  }
+
+  function handleDayDrop(event, day) {
+    event.preventDefault();
+    setDropTargetDate(null);
+
+    const taskPayload = parseTaskDragPayload(
+      event.dataTransfer.getData(TASK_DRAG_TYPE),
+    );
+
+    if (taskPayload) {
+      setPendingTaskSchedule({ sourceTask: taskPayload, date: day });
+      return;
+    }
+
+    const calendarItemId = event.dataTransfer.getData(CALENDAR_ITEM_DRAG_TYPE);
+    const calendarItem = items.find((item) => item.id === calendarItemId);
+
+    if (calendarItem && calendarItem.date !== day) {
+      onSaveItem({ ...calendarItem, date: day });
+    }
   }
 
   return (
@@ -329,7 +380,20 @@ export default function CalendarPanel({ items, onDeleteItem, onSaveItem, today }
           const isToday = day === today;
 
           return (
-            <article className={`calendar-day ${isToday ? "is-today" : ""}`} key={day}>
+            <article
+              className={`calendar-day ${isToday ? "is-today" : ""} ${
+                dropTargetDate === day ? "is-drop-target" : ""
+              }`}
+              data-date={day}
+              key={day}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) {
+                  setDropTargetDate(null);
+                }
+              }}
+              onDragOver={(event) => handleDayDragOver(event, day)}
+              onDrop={(event) => handleDayDrop(event, day)}
+            >
               <div className="calendar-day-heading">
                 <strong>{formatDayLabel(day)}</strong>
                 {isToday && <span>Oggi</span>}
@@ -342,8 +406,17 @@ export default function CalendarPanel({ items, onDeleteItem, onSaveItem, today }
                   {dayItems.map((item) => (
                     <button
                       className="calendar-event"
+                      draggable
                       key={item.id}
                       onClick={() => setEditingItem(item)}
+                      onDragEnd={() => setDropTargetDate(null)}
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData(
+                          CALENDAR_ITEM_DRAG_TYPE,
+                          item.id,
+                        );
+                      }}
                       type="button"
                     >
                       <span>{item.startTime || "Tutto il giorno"}</span>
@@ -375,6 +448,18 @@ export default function CalendarPanel({ items, onDeleteItem, onSaveItem, today }
             setIsCreatingItem(false);
           }}
           today={today}
+        />
+      )}
+
+      {pendingTaskSchedule && (
+        <ScheduleTaskModal
+          initialDate={pendingTaskSchedule.date}
+          onClose={() => setPendingTaskSchedule(null)}
+          onSubmit={(schedule) => {
+            onScheduleTask(pendingTaskSchedule.sourceTask, schedule);
+            setPendingTaskSchedule(null);
+          }}
+          sourceTask={pendingTaskSchedule.sourceTask}
         />
       )}
     </section>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import BottomNav from "./BottomNav.jsx";
+import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
 
 const TABS = [
   { key: "projects", label: "Progetti" },
@@ -335,11 +336,14 @@ function ProjectsTab({
   onDeleteProject,
   onSaveProjectActions,
   onUpdateProject,
+  onScheduleTask,
   projectActions,
   projects,
+  today,
 }) {
   const [expandedProjectIds, setExpandedProjectIds] = useState([]);
   const [editingProject, setEditingProject] = useState(null);
+  const [schedulingTask, setSchedulingTask] = useState(null);
 
   function toggleProject(projectId) {
     setExpandedProjectIds((currentIds) =>
@@ -419,6 +423,23 @@ function ProjectsTab({
                             <div className="task-content">
                               <strong>{action.title}</strong>
                             </div>
+                            <button
+                              aria-label={`Pianifica ${action.title} nel calendario`}
+                              className="secondary-button schedule-button"
+                              onClick={() =>
+                                setSchedulingTask({
+                                  sourceCollection: "projectActions",
+                                  sourceProjectId: project.id,
+                                  sourceProjectTitle: project.title,
+                                  sourceTaskId: action.id,
+                                  title: action.title,
+                                  description: action.description || "",
+                                })
+                              }
+                              type="button"
+                            >
+                              Calendario
+                            </button>
                           </li>
                         ))}
                       </ul>
@@ -441,6 +462,18 @@ function ProjectsTab({
           onSaveActions={onSaveProjectActions}
           onUpdateProject={onUpdateProject}
           project={editingProject}
+        />
+      )}
+
+      {schedulingTask && (
+        <ScheduleTaskModal
+          initialDate={today}
+          onClose={() => setSchedulingTask(null)}
+          onSubmit={(schedule) => {
+            onScheduleTask(schedulingTask, schedule);
+            setSchedulingTask(null);
+          }}
+          sourceTask={schedulingTask}
         />
       )}
     </section>
@@ -546,11 +579,13 @@ export default function GtdPage({
   onSaveProjectActions,
   onSaveSomedayMaybe,
   onSaveWaitingFor,
+  onScheduleTask,
   onUpdateProject,
   projectActions,
   projects,
   somedayMaybe,
   waitingFor,
+  today,
 }) {
   const [activeTab, setActiveTab] = useState("projects");
 
@@ -585,8 +620,10 @@ export default function GtdPage({
               onDeleteProject={onDeleteProject}
               onSaveProjectActions={onSaveProjectActions}
               onUpdateProject={onUpdateProject}
+              onScheduleTask={onScheduleTask}
               projectActions={projectActions}
               projects={projects}
+              today={today}
             />
           )}
 
