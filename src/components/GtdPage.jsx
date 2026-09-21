@@ -108,9 +108,10 @@ function BasicItemModal({
 
 function ProjectModal({
   actions,
+  moveLabel,
   onClose,
   onDeleteProject,
-  onMoveProjectToSomedayMaybe,
+  onMoveProject,
   onSaveActions,
   onUpdateProject,
   project,
@@ -313,19 +314,21 @@ function ProjectModal({
           </fieldset>
 
           <div className="modal-actions">
-            <button
-              className="secondary-button"
-              onClick={() => {
-                onMoveProjectToSomedayMaybe(
-                  { ...project, title },
-                  draftActions.filter((action) => action.title.trim()),
-                );
-                onClose();
-              }}
-              type="button"
-            >
-              Sposta in Prima o poi / Forse
-            </button>
+            {onMoveProject && (
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  onMoveProject(
+                    { ...project, title },
+                    draftActions.filter((action) => action.title.trim()),
+                  );
+                  onClose();
+                }}
+                type="button"
+              >
+                {moveLabel}
+              </button>
+            )}
             <button
               className="secondary-button danger-button"
               onClick={() => {
@@ -347,8 +350,10 @@ function ProjectModal({
 }
 
 function ProjectsTab({
+  emptyMessage = "Nessun progetto.",
+  moveLabel,
   onDeleteProject,
-  onMoveProjectToSomedayMaybe,
+  onMoveProject,
   onSaveProjectActions,
   onUpdateProject,
   onScheduleTask,
@@ -371,7 +376,7 @@ function ProjectsTab({
   return (
     <section className="gtd-tab-panel">
       {projects.length === 0 ? (
-        <p className="empty-state">Nessun progetto.</p>
+        <p className="empty-state">{emptyMessage}</p>
       ) : (
         <ul className="project-list">
           {projects.map((project) => {
@@ -473,8 +478,9 @@ function ProjectsTab({
             .filter((action) => action.projectId === editingProject.id)
             .sort((left, right) => (left.order || 0) - (right.order || 0))}
           onClose={() => setEditingProject(null)}
+          moveLabel={moveLabel}
           onDeleteProject={onDeleteProject}
-          onMoveProjectToSomedayMaybe={onMoveProjectToSomedayMaybe}
+          onMoveProject={onMoveProject}
           onSaveActions={onSaveProjectActions}
           onUpdateProject={onUpdateProject}
           project={editingProject}
@@ -589,6 +595,7 @@ export default function GtdPage({
   onDownloadArchiveAttachment,
   onDeleteProject,
   onMoveProjectToSomedayMaybe,
+  onMoveProjectToProjects,
   onDeleteSomedayMaybe,
   onDeleteWaitingFor,
   onNavigate,
@@ -635,12 +642,13 @@ export default function GtdPage({
           {activeTab === "projects" && (
             <ProjectsTab
               onDeleteProject={onDeleteProject}
-              onMoveProjectToSomedayMaybe={onMoveProjectToSomedayMaybe}
+              moveLabel="Sposta in Prima o poi / Forse"
+              onMoveProject={onMoveProjectToSomedayMaybe}
               onSaveProjectActions={onSaveProjectActions}
               onUpdateProject={onUpdateProject}
               onScheduleTask={onScheduleTask}
               projectActions={projectActions}
-              projects={projects}
+              projects={projects.filter((project) => project.status !== "someday")}
               today={today}
             />
           )}
@@ -656,13 +664,29 @@ export default function GtdPage({
           )}
 
           {activeTab === "someday" && (
-            <EditableList
-              emptyMessage="Nessuna idea in Prima o poi / Forse."
-              items={somedayMaybe}
-              modalTitle="Prima o poi / Forse"
-              onDelete={onDeleteSomedayMaybe}
-              onSave={onSaveSomedayMaybe}
-            />
+            <>
+              <ProjectsTab
+                emptyMessage="Nessun progetto in Prima o poi / Forse."
+                moveLabel="Sposta in Progetti"
+                onDeleteProject={onDeleteProject}
+                onMoveProject={onMoveProjectToProjects}
+                onSaveProjectActions={onSaveProjectActions}
+                onUpdateProject={onUpdateProject}
+                onScheduleTask={onScheduleTask}
+                projectActions={projectActions}
+                projects={projects.filter(
+                  (project) => project.status === "someday",
+                )}
+                today={today}
+              />
+              <EditableList
+                emptyMessage="Nessuna idea in Prima o poi / Forse."
+                items={somedayMaybe}
+                modalTitle="Prima o poi / Forse"
+                onDelete={onDeleteSomedayMaybe}
+                onSave={onSaveSomedayMaybe}
+              />
+            </>
           )}
 
           {activeTab === "archive" && (

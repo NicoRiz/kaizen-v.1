@@ -60,6 +60,20 @@ function initialKaizenData() {
   return createCachedKaizenData();
 }
 
+function normalizeProjectActions(projectId, actions, timestamp) {
+  return actions.map((action, index) => ({
+    ...action,
+    id: action.id || createId(),
+    projectId,
+    title: action.title.trim(),
+    completed: Boolean(action.completed),
+    order: index,
+    createdAt: action.createdAt || timestamp,
+    updatedAt: timestamp,
+    completedAt: action.completed ? action.completedAt || timestamp : null,
+  }));
+}
+
 export default function App() {
   const [kaizenData, setKaizenData] = useState(initialKaizenData);
   const kaizenDataRef = useRef(kaizenData);
@@ -130,6 +144,69 @@ export default function App() {
       legacyTaskCount: legacyTasks.length,
     }));
   }, [legacyTasks, migration.legacyTasksToNextActions]);
+
+  useEffect(() => {
+    const legacyDeferredProjects = somedayMaybe.filter(
+      (item) =>
+        item.sourceCollection === "projects" && Array.isArray(item.projectActions),
+    );
+
+    if (legacyDeferredProjects.length === 0) {
+      return;
+    }
+
+    const timestamp = nowIso();
+    updateCollections(
+      ["projects", "projectActions", "somedayMaybe"],
+      (currentData) => {
+        const currentDeferredProjects = currentData.somedayMaybe.filter(
+          (item) =>
+            item.sourceCollection === "projects" &&
+            Array.isArray(item.projectActions),
+        );
+
+        if (currentDeferredProjects.length === 0) {
+          return currentData;
+        }
+
+        const migratedProjectIds = new Set(
+          currentDeferredProjects.map((project) => project.id),
+        );
+        const projectsById = new Map(
+          currentData.projects.map((project) => [project.id, project]),
+        );
+        const actionsById = new Map(
+          currentData.projectActions.map((action) => [action.id, action]),
+        );
+
+        for (const deferredProject of currentDeferredProjects) {
+          const { projectActions: nestedActions, ...projectData } = deferredProject;
+          projectsById.set(deferredProject.id, {
+            ...projectData,
+            status: "someday",
+            updatedAt: projectData.updatedAt || timestamp,
+          });
+
+          for (const action of normalizeProjectActions(
+            deferredProject.id,
+            nestedActions,
+            timestamp,
+          )) {
+            actionsById.set(action.id, action);
+          }
+        }
+
+        return {
+          ...currentData,
+          projects: [...projectsById.values()],
+          projectActions: [...actionsById.values()],
+          somedayMaybe: currentData.somedayMaybe.filter(
+            (item) => !migratedProjectIds.has(item.id),
+          ),
+        };
+      },
+    );
+  }, [somedayMaybe]);
 
   function updateCollection(collectionName, updater) {
     updateCollections([collectionName], (currentData) => {
@@ -239,6 +316,7 @@ export default function App() {
     const project = {
       id: createId(),
       title: cleanTitle,
+      status: "active",
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -476,10 +554,18 @@ export default function App() {
   }
 
   function moveProjectToSomedayMaybe(projectInput, actionsInput) {
+    moveProjectToStatus(projectInput, actionsInput, "someday");
+  }
+
+  function moveProjectToProjects(projectInput, actionsInput) {
+    moveProjectToStatus(projectInput, actionsInput, "active");
+  }
+
+  function moveProjectToStatus(projectInput, actionsInput, status) {
     const timestamp = nowIso();
 
     updateCollections(
-      ["projects", "projectActions", "somedayMaybe"],
+      ["projects", "projectActions"],
       (currentData) => {
         const project = currentData.projects.find(
           (currentProject) => currentProject.id === projectInput.id,
@@ -489,39 +575,31 @@ export default function App() {
           return currentData;
         }
 
-        const normalizedActions = actionsInput.map((action, index) => ({
-          ...action,
-          id: action.id || createId(),
-          projectId: project.id,
-          title: action.title.trim(),
-          completed: Boolean(action.completed),
-          order: index,
-          createdAt: action.createdAt || timestamp,
-          updatedAt: timestamp,
-          completedAt: action.completed ? action.completedAt || timestamp : null,
-        }));
-        const movedProject = {
-          ...project,
-          title: projectInput.title.trim(),
-          description: project.description || project.notes || "",
-          projectActions: normalizedActions,
-          sourceCollection: "projects",
-          sourceProjectId: project.id,
-          movedAt: timestamp,
-          updatedAt: timestamp,
-        };
+        const normalizedActions = normalizeProjectActions(
+          project.id,
+          actionsInput,
+          timestamp,
+        );
 
         return {
           ...currentData,
-          projects: currentData.projects.filter(
-            (currentProject) => currentProject.id !== project.id,
+          projects: currentData.projects.map((currentProject) =>
+            currentProject.id === project.id
+              ? {
+                  ...currentProject,
+                  ...projectInput,
+                  title: projectInput.title.trim(),
+                  status,
+                  movedAt: timestamp,
+                  updatedAt: timestamp,
+                }
+              : currentProject,
           ),
-          projectActions: currentData.projectActions.filter(
-            (action) => action.projectId !== project.id,
-          ),
-          somedayMaybe: [
-            movedProject,
-            ...currentData.somedayMaybe.filter((item) => item.id !== project.id),
+          projectActions: [
+            ...currentData.projectActions.filter(
+              (action) => action.projectId !== project.id,
+            ),
+            ...normalizedActions,
           ],
         };
       },
@@ -533,17 +611,7 @@ export default function App() {
 
     updateCollection("projectActions", (currentActions) => [
       ...currentActions.filter((action) => action.projectId !== projectId),
-      ...actions.map((action, index) => ({
-        ...action,
-        id: action.id || createId(),
-        projectId,
-        title: action.title.trim(),
-        completed: Boolean(action.completed),
-        order: index,
-        createdAt: action.createdAt || timestamp,
-        updatedAt: timestamp,
-        completedAt: action.completed ? action.completedAt || timestamp : null,
-      })),
+      ...normalizeProjectActions(projectId, actions, timestamp),
     ]);
   }
 
@@ -706,6 +774,7 @@ export default function App() {
           onDownloadArchiveAttachment={sync.downloadArchiveAttachment}
           onDeleteProject={deleteProject}
           onMoveProjectToSomedayMaybe={moveProjectToSomedayMaybe}
+          onMoveProjectToProjects={moveProjectToProjects}
           onDeleteSomedayMaybe={deleteSomedayMaybe}
           onDeleteWaitingFor={deleteWaitingFor}
           onNavigate={navigate}
@@ -781,7 +850,7 @@ export default function App() {
         onScheduleTask={scheduleTaskInCalendar}
         onDeleteCalendarItem={deleteCalendarItem}
         onToggleNextAction={toggleNextAction}
-        projects={projects}
+        projects={projects.filter((project) => project.status !== "someday")}
       />
     </>
   );

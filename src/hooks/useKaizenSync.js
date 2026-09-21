@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { COLLECTIONS, MIGRATION_VERSION } from "../lib/kaizenData.js";
-import { supabase, supabaseConfig } from "../lib/supabaseClient.js";
+import {
+  SUPABASE_AUTH_STORAGE_KEY,
+  supabase,
+  supabaseConfig,
+} from "../lib/supabaseClient.js";
 import {
   applyChangedRecords,
   analyzeDuplicateRecords,
@@ -78,11 +82,36 @@ function readInitialLocalRecords() {
   return recordsFromData(normalizeLegacyData(readLegacyData()).data);
 }
 
+function readCachedSupabaseSession() {
+  try {
+    const rawSession = window.localStorage.getItem(SUPABASE_AUTH_STORAGE_KEY);
+
+    if (!rawSession) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawSession);
+    const session = parsed?.currentSession || parsed?.session || parsed;
+    return session?.user?.id ? session : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useKaizenSync({ onReplaceData }) {
-  const [session, setSession] = useState(null);
-  const [authReady, setAuthReady] = useState(false);
+  const initialCachedSessionRef = useRef(readCachedSupabaseSession());
+  const [session, setSession] = useState(() =>
+    navigator.onLine ? null : initialCachedSessionRef.current,
+  );
+  const [authReady, setAuthReady] = useState(
+    () => !supabaseConfig.isConfigured || (!navigator.onLine && Boolean(initialCachedSessionRef.current)),
+  );
   const [status, setStatus] = useState(
-    supabaseConfig.isConfigured ? STATUS.checking : STATUS.localOnly,
+    supabaseConfig.isConfigured
+      ? navigator.onLine
+        ? STATUS.checking
+        : STATUS.offline
+      : STATUS.localOnly,
   );
   const [message, setMessage] = useState("");
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -134,7 +163,7 @@ export function useKaizenSync({ onReplaceData }) {
   const flushPromiseRef = useRef(null);
 
   const user = session?.user || null;
-  const canUseCloud = Boolean(supabase && user);
+  const canUseCloud = Boolean(supabase && user && isOnline);
 
   async function fetchRemoteRecords() {
     const { data: remoteRows, error } = await supabase
@@ -224,13 +253,47 @@ export function useKaizenSync({ onReplaceData }) {
   }
 
   useEffect(() => {
-    function handleOnline() {
+    async function handleOnline() {
+      if (!supabase) {
+        setIsOnline(true);
+        return;
+      }
+
+      const { data: sessionData, error } = await supabase.auth.getSession();
       setIsOnline(true);
+      setAuthReady(true);
+
+      if (sessionData.session) {
+        initialCachedSessionRef.current = sessionData.session;
+        setSession(sessionData.session);
+        setStatus(STATUS.syncing);
+        setMessage("Connessione ripristinata. Sincronizzazione in corso...");
+        return;
+      }
+
+      if (error) {
+        console.error("Supabase session refresh error", error);
+      }
+
+      initialCachedSessionRef.current = null;
+      setSession(null);
+      setStatus(STATUS.unauthenticated);
+      setMessage("Sessione scaduta. Effettua di nuovo il login.");
     }
 
     function handleOffline() {
       setIsOnline(false);
+      const cachedSession =
+        readCachedSupabaseSession() || initialCachedSessionRef.current;
+
+      if (cachedSession) {
+        initialCachedSessionRef.current = cachedSession;
+        setSession(cachedSession);
+        setAuthReady(true);
+      }
+
       setStatus(STATUS.offline);
+      setMessage("Offline: le modifiche vengono salvate su questo dispositivo.");
     }
 
     window.addEventListener("online", handleOnline);
@@ -257,23 +320,58 @@ export function useKaizenSync({ onReplaceData }) {
         return;
       }
 
-      if (error) {
+      const cachedSession =
+        readCachedSupabaseSession() || initialCachedSessionRef.current;
+      const nextSession =
+        sessionData.session || (!navigator.onLine ? cachedSession : null);
+
+      if (error && !nextSession) {
         console.error("Supabase session error", error);
         setStatus(STATUS.error);
         setMessage("Sessione non recuperata. Effettua di nuovo il login.");
       }
 
-      setSession(sessionData.session);
+      if (nextSession) {
+        initialCachedSessionRef.current = nextSession;
+      } else if (navigator.onLine) {
+        initialCachedSessionRef.current = null;
+      }
+
+      setSession(nextSession);
       setAuthReady(true);
-      setStatus(sessionData.session ? STATUS.syncing : STATUS.unauthenticated);
+      setStatus(
+        !navigator.onLine
+          ? STATUS.offline
+          : nextSession
+            ? STATUS.syncing
+            : STATUS.unauthenticated,
+      );
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
+      const offlineSession =
+        !navigator.onLine && !nextSession
+          ? readCachedSupabaseSession() || initialCachedSessionRef.current
+          : null;
+      const effectiveSession = nextSession || offlineSession;
+
+      if (nextSession) {
+        initialCachedSessionRef.current = nextSession;
+      } else if (navigator.onLine) {
+        initialCachedSessionRef.current = null;
+      }
+
+      setSession(effectiveSession);
       setAuthReady(true);
-      setStatus(nextSession ? STATUS.syncing : STATUS.unauthenticated);
+      setStatus(
+        !navigator.onLine
+          ? STATUS.offline
+          : effectiveSession
+            ? STATUS.syncing
+            : STATUS.unauthenticated,
+      );
     });
 
     return () => {
@@ -309,6 +407,7 @@ export function useKaizenSync({ onReplaceData }) {
     }
 
     flushPromiseRef.current = (async () => {
+      let shouldContinueFlush = false;
       setStatus(STATUS.syncing);
 
       try {
@@ -396,6 +495,7 @@ export function useKaizenSync({ onReplaceData }) {
         queueRef.current = confirmation.queue;
         writeSyncQueue(queueRef.current);
         replaceFromRecords(confirmation.records);
+        shouldContinueFlush = queueRef.current.length > 0;
 
         setStatus(STATUS.synced);
         setMessage("");
@@ -408,7 +508,7 @@ export function useKaizenSync({ onReplaceData }) {
       } finally {
         flushPromiseRef.current = null;
 
-        if (navigator.onLine && normalizeSyncQueue(queueRef.current).length > 0) {
+        if (navigator.onLine && shouldContinueFlush) {
           window.setTimeout(() => flushQueue(), 0);
         }
       }

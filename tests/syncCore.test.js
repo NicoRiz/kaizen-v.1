@@ -946,7 +946,7 @@ test("Offline queue survives a simulated application restart", () => {
   }
 });
 
-test("Project move is represented as one queued cross-collection change", () => {
+test("Deferred project remains a project with its actions", () => {
   const originalData = {
     projects: [
       {
@@ -960,45 +960,41 @@ test("Project move is represented as one queued cross-collection change", () => 
   const previousRecords = recordsFromData(originalData);
   const movedProject = {
     ...originalData.projects[0],
-    description: originalData.projects[0].notes,
-    projectActions: originalData.projectActions,
-    sourceCollection: "projects",
-    sourceProjectId: "project-move",
+    status: "someday",
     movedAt: "2026-08-15T11:00:00.000Z",
     updatedAt: "2026-08-15T11:00:00.000Z",
   };
+  const movedActions = originalData.projectActions.map((item) => ({
+    ...item,
+    updatedAt: "2026-08-15T11:00:00.000Z",
+  }));
   const nextData = {
-    projects: [],
-    projectActions: [],
-    somedayMaybe: [movedProject],
+    projects: [movedProject],
+    projectActions: movedActions,
   };
   const changes = diffDataRecords(
     previousRecords,
     nextData,
-    ["projects", "projectActions", "somedayMaybe"],
+    ["projects", "projectActions"],
     "2026-08-15T11:00:00.000Z",
   );
   const queue = mergeQueuedRecords([], changes);
 
-  assert.equal(changes.length, 3);
-  assert.equal(queue.length, 3);
+  assert.equal(changes.length, 2);
+  assert.equal(queue.length, 2);
   assert.equal(
-    changes.find((record) => record.collection === "projects").deleted_at,
-    "2026-08-15T11:00:00.000Z",
+    changes.find((record) => record.collection === "projects").data.status,
+    "someday",
   );
   assert.equal(
-    changes.find((record) => record.collection === "projectActions").deleted_at,
-    "2026-08-15T11:00:00.000Z",
-  );
-  assert.equal(
-    changes.find((record) => record.collection === "somedayMaybe").data.notes,
+    changes.find((record) => record.collection === "projects").data.notes,
     "Keep these notes",
   );
   assert.equal(
-    changes.find((record) => record.collection === "somedayMaybe").data.projectActions[0]
-      .title,
+    changes.find((record) => record.collection === "projectActions").data.title,
     "Keep action",
   );
+  assert.equal(changes.some((record) => record.deleted_at), false);
 });
 
 test("Reconnect preserves concurrent remote and offline edits without overwriting either", () => {

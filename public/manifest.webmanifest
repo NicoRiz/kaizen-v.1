@@ -1,0 +1,18 @@
+{
+  "name": "Kaizen",
+  "short_name": "Kaizen",
+  "description": "Organizzazione personale locale e sincronizzata.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f1e8",
+  "theme_color": "#1f4d3b",
+  "icons": [
+    {
+      "src": "./kaizen-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

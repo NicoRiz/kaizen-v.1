@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test",
+    "test:offline": "node scripts/offline-check.mjs",
     "test:visual": "node scripts/visual-check.mjs"
   },
   "dependencies": {
