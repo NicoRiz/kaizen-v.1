@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AuthScreen from "./components/AuthScreen.jsx";
 import GtdPage from "./components/GtdPage.jsx";
 import Home from "./components/Home.jsx";
@@ -6,7 +6,7 @@ import NotesHub from "./components/NotesHub.jsx";
 import NotesSection from "./components/NotesSection.jsx";
 import SyncStatus from "./components/SyncStatus.jsx";
 import { useKaizenSync } from "./hooks/useKaizenSync.js";
-import { COLLECTIONS, STORAGE_KEYS } from "./lib/kaizenData.js";
+import { STORAGE_KEYS } from "./lib/kaizenData.js";
 import {
   createCachedKaizenData,
   createId,
@@ -62,15 +62,17 @@ function initialKaizenData() {
 
 export default function App() {
   const [kaizenData, setKaizenData] = useState(initialKaizenData);
+  const kaizenDataRef = useRef(kaizenData);
   const [migration, setMigration] = useState(() =>
     readStorage(STORAGE_KEYS.migration, {}),
   );
   const [activeSection, setActiveSection] = useState(PRIMARY_SECTIONS.home);
   const [activeNoteSection, setActiveNoteSection] = useState(null);
-  const sync = useKaizenSync({
-    data: kaizenData,
-    onReplaceData: setKaizenData,
-  });
+  const replaceKaizenData = useCallback((nextData) => {
+    kaizenDataRef.current = nextData;
+    setKaizenData(nextData);
+  }, []);
+  const sync = useKaizenSync({ onReplaceData: replaceKaizenData });
 
   const today = useMemo(() => dateKey(), []);
   const {
@@ -85,12 +87,6 @@ export default function App() {
     somedayMaybe,
     waitingFor,
   } = kaizenData;
-
-  useEffect(() => {
-    for (const collection of COLLECTIONS) {
-      sync.trackCollectionChange(collection.name, kaizenData[collection.name]);
-    }
-  }, [kaizenData, sync.trackCollectionChange]);
 
   useEffect(() => {
     writeStorage(STORAGE_KEYS.migration, migration);
@@ -136,20 +132,28 @@ export default function App() {
   }, [legacyTasks, migration.legacyTasksToNextActions]);
 
   function updateCollection(collectionName, updater) {
-    setKaizenData((currentData) => {
+    updateCollections([collectionName], (currentData) => {
       const currentValue = currentData[collectionName];
       const nextValue =
         typeof updater === "function" ? updater(currentValue, currentData) : updater;
 
-      if (Object.is(currentValue, nextValue)) {
-        return currentData;
-      }
-
-      return {
-        ...currentData,
-        [collectionName]: nextValue,
-      };
+      return Object.is(currentValue, nextValue)
+        ? currentData
+        : { ...currentData, [collectionName]: nextValue };
     });
+  }
+
+  function updateCollections(collectionNames, updater) {
+    const currentData = kaizenDataRef.current;
+    const nextData = updater(currentData);
+
+    if (Object.is(currentData, nextData)) {
+      return;
+    }
+
+    kaizenDataRef.current = nextData;
+    setKaizenData(nextData);
+    sync.trackDataChange(collectionNames, nextData);
   }
 
   function navigate(section) {
@@ -471,6 +475,59 @@ export default function App() {
     );
   }
 
+  function moveProjectToSomedayMaybe(projectInput, actionsInput) {
+    const timestamp = nowIso();
+
+    updateCollections(
+      ["projects", "projectActions", "somedayMaybe"],
+      (currentData) => {
+        const project = currentData.projects.find(
+          (currentProject) => currentProject.id === projectInput.id,
+        );
+
+        if (!project) {
+          return currentData;
+        }
+
+        const normalizedActions = actionsInput.map((action, index) => ({
+          ...action,
+          id: action.id || createId(),
+          projectId: project.id,
+          title: action.title.trim(),
+          completed: Boolean(action.completed),
+          order: index,
+          createdAt: action.createdAt || timestamp,
+          updatedAt: timestamp,
+          completedAt: action.completed ? action.completedAt || timestamp : null,
+        }));
+        const movedProject = {
+          ...project,
+          title: projectInput.title.trim(),
+          description: project.description || project.notes || "",
+          projectActions: normalizedActions,
+          sourceCollection: "projects",
+          sourceProjectId: project.id,
+          movedAt: timestamp,
+          updatedAt: timestamp,
+        };
+
+        return {
+          ...currentData,
+          projects: currentData.projects.filter(
+            (currentProject) => currentProject.id !== project.id,
+          ),
+          projectActions: currentData.projectActions.filter(
+            (action) => action.projectId !== project.id,
+          ),
+          somedayMaybe: [
+            movedProject,
+            ...currentData.somedayMaybe.filter((item) => item.id !== project.id),
+          ],
+        };
+      },
+    );
+  }
+
   function saveProjectActions(projectId, actions) {
     const timestamp = nowIso();
 
@@ -648,6 +705,7 @@ export default function App() {
           onDeleteArchiveItem={deleteArchiveItem}
           onDownloadArchiveAttachment={sync.downloadArchiveAttachment}
           onDeleteProject={deleteProject}
+          onMoveProjectToSomedayMaybe={moveProjectToSomedayMaybe}
           onDeleteSomedayMaybe={deleteSomedayMaybe}
           onDeleteWaitingFor={deleteWaitingFor}
           onNavigate={navigate}

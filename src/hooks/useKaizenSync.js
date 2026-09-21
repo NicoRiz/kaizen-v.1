@@ -12,7 +12,7 @@ import {
   countDataCollections,
   dataFromRecords,
   deserializeRecordFromSupabase,
-  diffCollectionRecords,
+  diffDataRecords,
   fingerprintRecords,
   flushQueuedOperations,
   getBestLocalRecoveryData,
@@ -22,7 +22,6 @@ import {
   mergeQueuedRecords,
   normalizeLegacyData,
   normalizeSyncQueue,
-  planSupabaseFirstBootstrap,
   readLegacyData,
   readDeviceSnapshots,
   readLatestLegacyBackup,
@@ -31,6 +30,7 @@ import {
   readSyncCache,
   readSyncMeta,
   readSyncQueue,
+  reconcileSyncRecords,
   recordsFromData,
   serializeRecordForSupabase,
   summarizeDeviceSnapshots,
@@ -68,7 +68,17 @@ function summarizePreImportSnapshot(snapshot) {
   };
 }
 
-export function useKaizenSync({ data, onReplaceData }) {
+function readInitialLocalRecords() {
+  const cachedRecords = readSyncCache().records || [];
+
+  if (countRecords(cachedRecords) > 0) {
+    return cachedRecords;
+  }
+
+  return recordsFromData(normalizeLegacyData(readLegacyData()).data);
+}
+
+export function useKaizenSync({ onReplaceData }) {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [status, setStatus] = useState(
@@ -118,10 +128,9 @@ export function useKaizenSync({ data, onReplaceData }) {
     };
   });
   const [authError, setAuthError] = useState("");
-  const recordsRef = useRef(readSyncCache().records || []);
+  const recordsRef = useRef(readInitialLocalRecords());
   const queueRef = useRef(normalizeSyncQueue(readSyncQueue()));
   const hasBootstrappedRef = useRef(false);
-  const applyingRemoteRef = useRef(false);
   const flushPromiseRef = useRef(null);
 
   const user = session?.user || null;
@@ -273,8 +282,24 @@ export function useKaizenSync({ data, onReplaceData }) {
     };
   }, []);
 
+  const replaceFromRecords = useCallback(
+    (records) => {
+      recordsRef.current = records;
+      writeSyncCache(records);
+      const nextData = dataFromRecords(records);
+      writeLegacyData(nextData);
+      onReplaceData(nextData);
+    },
+    [onReplaceData],
+  );
+
   const flushQueue = useCallback(async () => {
-    if (!canUseCloud || !navigator.onLine) {
+    if (!canUseCloud) {
+      setStatus(supabase ? STATUS.unauthenticated : STATUS.localOnly);
+      return false;
+    }
+
+    if (!navigator.onLine) {
       setStatus(STATUS.offline);
       return false;
     }
@@ -284,21 +309,27 @@ export function useKaizenSync({ data, onReplaceData }) {
     }
 
     flushPromiseRef.current = (async () => {
-      const queue = normalizeSyncQueue(queueRef.current);
-      queueRef.current = queue;
-
-      if (queue.length === 0) {
-        setStatus(STATUS.synced);
-        setDiagnostics((current) => ({
-          ...current,
-          queueCount: 0,
-        }));
-        return true;
-      }
-
       setStatus(STATUS.syncing);
 
       try {
+        const remoteRecords = await fetchRemoteRecords();
+        const reconciliation = reconcileSyncRecords({
+          queue: queueRef.current,
+          remoteRecords,
+        });
+        queueRef.current = reconciliation.queue;
+        writeSyncQueue(queueRef.current);
+        replaceFromRecords(reconciliation.records);
+        setDiagnostics((current) => ({
+          ...current,
+          cacheCount: countRecords(reconciliation.records),
+          conflictCount:
+            (current.conflictCount || 0) + reconciliation.conflicts.length,
+          queueCount: queueRef.current.length,
+          remoteCount: reconciliation.remoteCount,
+          source: queueRef.current.length > 0 ? "remote+offline-queue" : "remote",
+        }));
+
         while (true) {
           const result = await flushQueuedOperations({
             getQueue: () => queueRef.current,
@@ -357,6 +388,15 @@ export function useKaizenSync({ data, onReplaceData }) {
           }
         }
 
+        const confirmedRemoteRecords = await fetchRemoteRecords();
+        const confirmation = reconcileSyncRecords({
+          queue: queueRef.current,
+          remoteRecords: confirmedRemoteRecords,
+        });
+        queueRef.current = confirmation.queue;
+        writeSyncQueue(queueRef.current);
+        replaceFromRecords(confirmation.records);
+
         setStatus(STATUS.synced);
         setMessage("");
         return true;
@@ -367,11 +407,15 @@ export function useKaizenSync({ data, onReplaceData }) {
         return false;
       } finally {
         flushPromiseRef.current = null;
+
+        if (navigator.onLine && normalizeSyncQueue(queueRef.current).length > 0) {
+          window.setTimeout(() => flushQueue(), 0);
+        }
       }
     })();
 
     return flushPromiseRef.current;
-  }, [canUseCloud, user?.id]);
+  }, [canUseCloud, replaceFromRecords, user?.id]);
 
   const enqueueRecords = useCallback(
     (records) => {
@@ -381,7 +425,13 @@ export function useKaizenSync({ data, onReplaceData }) {
 
       queueRef.current = mergeQueuedRecords(queueRef.current, records);
       writeSyncQueue(queueRef.current);
-      setStatus(navigator.onLine ? STATUS.syncing : STATUS.offline);
+      setStatus(
+        !supabaseConfig.isConfigured
+          ? STATUS.localOnly
+          : navigator.onLine
+            ? STATUS.syncing
+            : STATUS.offline,
+      );
       setMessage(
         navigator.onLine
           ? "Sincronizzazione modifica..."
@@ -391,24 +441,9 @@ export function useKaizenSync({ data, onReplaceData }) {
         ...current,
         queueCount: queueRef.current.length,
       }));
-      return flushQueue();
+      return canUseCloud ? flushQueue() : Promise.resolve(false);
     },
-    [flushQueue],
-  );
-
-  const replaceFromRecords = useCallback(
-    (records) => {
-      applyingRemoteRef.current = true;
-      recordsRef.current = records;
-      writeSyncCache(records);
-      const nextData = dataFromRecords(records);
-      writeLegacyData(nextData);
-      onReplaceData(nextData);
-      window.setTimeout(() => {
-        applyingRemoteRef.current = false;
-      }, 0);
-    },
-    [onReplaceData],
+    [canUseCloud, flushQueue],
   );
 
   useEffect(() => {
@@ -435,10 +470,6 @@ export function useKaizenSync({ data, onReplaceData }) {
       const deviceMigrationId = `${deviceId}:${timestamp}`;
       const cacheRecords = readSyncCache().records || [];
       const cacheCount = countRecords(cacheRecords);
-
-      if (cacheCount > 0) {
-        replaceFromRecords(cacheRecords);
-      }
 
       setDiagnostics((current) => ({
         ...current,
@@ -475,19 +506,14 @@ export function useKaizenSync({ data, onReplaceData }) {
       });
 
       try {
-        const remoteRecords = await fetchRemoteRecords();
-        const plan = planSupabaseFirstBootstrap({
-          cacheRecords,
-          remoteRecords,
-        });
-        const remoteCount = plan.remoteCount;
+        hasBootstrappedRef.current = true;
+        const didSync = await flushQueue();
 
-        if (cancelled) {
+        if (cancelled || !didSync) {
           return;
         }
 
-        replaceFromRecords(plan.authoritativeRecords);
-        hasBootstrappedRef.current = true;
+        const remoteCount = countRecords(recordsRef.current);
 
         const nextMeta = {
           migrationVersion: MIGRATION_VERSION,
@@ -502,7 +528,7 @@ export function useKaizenSync({ data, onReplaceData }) {
           localRecordCount: localCount,
           remoteRecordCount: remoteCount,
           recoveredRecordCount: remoteCount,
-          recoverySource: plan.source,
+          recoverySource: queueRef.current.length > 0 ? "remote+offline-queue" : "remote",
           requiresExplicitImport: false,
           sourceAlreadyImported: Boolean(previousDeviceMigration.deviceMigrationCompletedAt),
           sourceFingerprint,
@@ -519,7 +545,7 @@ export function useKaizenSync({ data, onReplaceData }) {
           remoteCount,
           snapshotSummaries: summarizeDeviceSnapshots(),
           snapshotKey,
-          source: plan.source,
+          source: "remote",
         }));
         writeDeviceMigrationMeta({
           conflictCount: 0,
@@ -532,7 +558,7 @@ export function useKaizenSync({ data, onReplaceData }) {
           localRecordCount: localCount,
           remoteRecordCount: remoteCount,
           recoveredRecordCount: remoteCount,
-          recoverySource: plan.source,
+          recoverySource: "remote",
           requiresExplicitImport: false,
           sourceAlreadyImported: Boolean(previousDeviceMigration.deviceMigrationCompletedAt),
           sourceFingerprint,
@@ -556,8 +582,6 @@ export function useKaizenSync({ data, onReplaceData }) {
       } catch (error) {
         console.error("Kaizen initial sync error", error);
         hasBootstrappedRef.current = true;
-        recordsRef.current = cacheRecords;
-        writeSyncCache(cacheRecords);
         setDiagnostics((current) => ({
           ...current,
           cacheCount,
@@ -580,7 +604,7 @@ export function useKaizenSync({ data, onReplaceData }) {
           sourceFingerprint,
         });
         setStatus(navigator.onLine ? STATUS.error : STATUS.offline);
-        setMessage("Uso la cache locale. Supabase resta la fonte autorevole e verra' ricaricato appena possibile.");
+        setMessage("Uso i dati locali. Le modifiche verranno sincronizzate appena possibile.");
       }
     }
 
@@ -594,6 +618,7 @@ export function useKaizenSync({ data, onReplaceData }) {
     canUseCloud,
     deviceId,
     lastSuccessfulSyncAt,
+    flushQueue,
     replaceFromRecords,
     user?.id,
   ]);
@@ -629,6 +654,16 @@ export function useKaizenSync({ data, onReplaceData }) {
           }
 
           const incoming = deserializeRecordFromSupabase(row);
+          const hasPendingChange = normalizeSyncQueue(queueRef.current).some(
+            (operation) =>
+              operation.collection === incoming.collection &&
+              operation.recordId === incoming.id,
+          );
+
+          if (hasPendingChange) {
+            return;
+          }
+
           const nextRecords = applyChangedRecords(recordsRef.current, [incoming]);
           replaceFromRecords(nextRecords);
         },
@@ -644,24 +679,22 @@ export function useKaizenSync({ data, onReplaceData }) {
     };
   }, [canUseCloud, replaceFromRecords, user?.id]);
 
-  const trackCollectionChange = useCallback(
-    (collectionName, value) => {
-      const collection = COLLECTIONS.find((item) => item.name === collectionName);
+  const trackDataChange = useCallback(
+    (collectionNames, nextData) => {
+      const validCollectionNames = [...new Set(collectionNames)].filter((name) =>
+        COLLECTIONS.some((collection) => collection.name === name),
+      );
 
-      if (!collection) {
+      if (validCollectionNames.length === 0) {
         return;
       }
 
-      writeLegacyData({ ...data, [collectionName]: value });
+      writeLegacyData(nextData);
 
-      if (!hasBootstrappedRef.current || applyingRemoteRef.current) {
-        return;
-      }
-
-      const changes = diffCollectionRecords(
+      const changes = diffDataRecords(
         recordsRef.current,
-        value,
-        collectionName,
+        nextData,
+        validCollectionNames,
       );
 
       if (changes.length === 0) {
@@ -672,7 +705,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       writeSyncCache(recordsRef.current);
       enqueueRecords(changes);
     },
-    [data, enqueueRecords],
+    [enqueueRecords],
   );
 
   async function signIn(email, password, mode) {
@@ -1140,7 +1173,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       signIn,
       signOut,
       status,
-      trackCollectionChange,
+      trackDataChange,
       uploadArchiveAttachments,
       user,
     }),
@@ -1156,7 +1189,7 @@ export function useKaizenSync({ data, onReplaceData }) {
       migrationInfo,
       diagnostics,
       status,
-      trackCollectionChange,
+      trackDataChange,
       user,
     ],
   );

@@ -840,6 +840,29 @@ export function diffCollectionRecords(previousRecords, nextData, collectionName,
   return changes;
 }
 
+export function diffDataRecords(
+  previousRecords,
+  nextData,
+  collectionNames,
+  timestamp = nowIso(),
+) {
+  let workingRecords = previousRecords;
+  const changes = [];
+
+  for (const collectionName of [...new Set(collectionNames)]) {
+    const collectionChanges = diffCollectionRecords(
+      workingRecords,
+      nextData[collectionName],
+      collectionName,
+      timestamp,
+    );
+    changes.push(...collectionChanges);
+    workingRecords = applyChangedRecords(workingRecords, collectionChanges);
+  }
+
+  return changes;
+}
+
 export function applyChangedRecords(currentRecords, changedRecords) {
   const byKey = new Map(currentRecords.map((record) => [recordKey(record), record]));
 
@@ -923,6 +946,79 @@ export function removeFlushedOperations(queue = [], flushedOperations = []) {
   );
 
   return normalizeSyncQueue(queue).filter((item) => !flushedIds.has(item.id));
+}
+
+export function reconcileSyncRecords(options = {}) {
+  const remoteRecords = options.remoteRecords || [];
+  const pendingOperations = normalizeSyncQueue(options.queue || []);
+  const timestamp = options.timestamp || nowIso();
+  const idFactory = options.idFactory || createId;
+  const recordsByKey = new Map(
+    remoteRecords.map((record) => [recordKey(record), record]),
+  );
+  const pendingByKey = new Map(
+    pendingOperations.map((operation) => [operationKey(operation), operation]),
+  );
+  const remoteUpserts = [];
+  const conflicts = [];
+
+  for (const operation of pendingByKey.values()) {
+    const localRecord = operation.record;
+    const key = recordKey(localRecord);
+    const remoteRecord = recordsByKey.get(key);
+
+    if (!remoteRecord) {
+      recordsByKey.set(key, localRecord);
+      remoteUpserts.push(localRecord);
+      continue;
+    }
+
+    if (recordsEqual(localRecord, remoteRecord)) {
+      recordsByKey.set(key, newerMetadata(localRecord, remoteRecord));
+      continue;
+    }
+
+    const localVersion = Number(localRecord.version) || 1;
+    const remoteVersion = Number(remoteRecord.version) || 1;
+
+    if (localVersion > remoteVersion) {
+      recordsByKey.set(key, localRecord);
+      remoteUpserts.push(localRecord);
+      continue;
+    }
+
+    recordsByKey.set(key, remoteRecord);
+
+    // A remote write reached the same record while this device was offline.
+    // Keep the remote winner at the original id and preserve the local content
+    // as a deterministic conflict copy instead of silently overwriting either.
+    if (!localRecord.deleted_at) {
+      const conflictRecord = createConflictRecord(
+        localRecord,
+        remoteRecord,
+        timestamp,
+        idFactory,
+      );
+      recordsByKey.set(recordKey(conflictRecord), conflictRecord);
+      remoteUpserts.push(conflictRecord);
+      conflicts.push({
+        collection: localRecord.collection,
+        id: localRecord.id,
+        preservedAs: conflictRecord.id,
+      });
+    }
+  }
+
+  const records = dedupeRecords([...recordsByKey.values()]);
+  const outgoingQueue = mergeQueuedRecords([], remoteUpserts, timestamp);
+
+  return {
+    conflicts,
+    records,
+    remoteCount: countRecords(remoteRecords),
+    remoteUpserts: dedupeRecords(remoteUpserts),
+    queue: outgoingQueue,
+  };
 }
 
 export async function flushQueuedOperations(options = {}) {

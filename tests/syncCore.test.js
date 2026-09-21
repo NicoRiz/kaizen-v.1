@@ -11,6 +11,7 @@ import {
   createRemoteUserResetPlan,
   dataFromRecords,
   diffCollectionRecords,
+  diffDataRecords,
   fingerprintRecords,
   flushQueuedOperations,
   getBestLocalRecoveryData,
@@ -25,10 +26,13 @@ import {
   planSupabaseFirstBootstrap,
   pruneDeviceSnapshots,
   queueFromRecords,
+  readSyncQueue,
+  reconcileSyncRecords,
   readDeviceSnapshots,
   recordsFromData,
   removeFlushedOperations,
   validateMigrationResult,
+  writeSyncQueue,
 } from "../src/lib/syncCore.js";
 
 function action(id, title, updatedAt = "2026-08-15T10:00:00.000Z") {
@@ -914,6 +918,119 @@ test("Sync queue preserves pending operations when the remote flush fails", asyn
   assert.equal(queue.length, 1);
   assert.equal(queue[0].id, originalOperationId);
   assert.equal(queue[0].record.id, "pending");
+});
+
+test("Offline queue survives a simulated application restart", () => {
+  const storage = makeStorage({});
+  const previousWindow = globalThis.window;
+  globalThis.window = { localStorage: storage };
+
+  try {
+    const record = recordsFromData({
+      nextActions: [action("persistent", "Persistent offline change")],
+    }).find((item) => item.collection === "nextActions");
+    const queue = mergeQueuedRecords([], [record]);
+
+    writeSyncQueue(queue);
+    const restoredQueue = normalizeSyncQueue(readSyncQueue());
+
+    assert.equal(restoredQueue.length, 1);
+    assert.equal(restoredQueue[0].record.id, "persistent");
+    assert.equal(restoredQueue[0].record.data.title, "Persistent offline change");
+  } finally {
+    if (previousWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = previousWindow;
+    }
+  }
+});
+
+test("Project move is represented as one queued cross-collection change", () => {
+  const originalData = {
+    projects: [
+      {
+        ...project("project-move", "Move me"),
+        notes: "Keep these notes",
+      },
+    ],
+    projectActions: [projectAction("action-move", "project-move", "Keep action")],
+    somedayMaybe: [],
+  };
+  const previousRecords = recordsFromData(originalData);
+  const movedProject = {
+    ...originalData.projects[0],
+    description: originalData.projects[0].notes,
+    projectActions: originalData.projectActions,
+    sourceCollection: "projects",
+    sourceProjectId: "project-move",
+    movedAt: "2026-08-15T11:00:00.000Z",
+    updatedAt: "2026-08-15T11:00:00.000Z",
+  };
+  const nextData = {
+    projects: [],
+    projectActions: [],
+    somedayMaybe: [movedProject],
+  };
+  const changes = diffDataRecords(
+    previousRecords,
+    nextData,
+    ["projects", "projectActions", "somedayMaybe"],
+    "2026-08-15T11:00:00.000Z",
+  );
+  const queue = mergeQueuedRecords([], changes);
+
+  assert.equal(changes.length, 3);
+  assert.equal(queue.length, 3);
+  assert.equal(
+    changes.find((record) => record.collection === "projects").deleted_at,
+    "2026-08-15T11:00:00.000Z",
+  );
+  assert.equal(
+    changes.find((record) => record.collection === "projectActions").deleted_at,
+    "2026-08-15T11:00:00.000Z",
+  );
+  assert.equal(
+    changes.find((record) => record.collection === "somedayMaybe").data.notes,
+    "Keep these notes",
+  );
+  assert.equal(
+    changes.find((record) => record.collection === "somedayMaybe").data.projectActions[0]
+      .title,
+    "Keep action",
+  );
+});
+
+test("Reconnect preserves concurrent remote and offline edits without overwriting either", () => {
+  const remoteRecord = {
+    ...recordsFromData({
+      nextActions: [action("shared", "Remote edit", "2026-08-15T11:00:00.000Z")],
+    }).find((record) => record.collection === "nextActions"),
+    version: 2,
+  };
+  const localRecord = {
+    ...recordsFromData({
+      nextActions: [action("shared", "Offline edit", "2026-08-15T10:30:00.000Z")],
+    }).find((record) => record.collection === "nextActions"),
+    version: 2,
+  };
+  const plan = reconcileSyncRecords({
+    queue: mergeQueuedRecords([], [localRecord]),
+    remoteRecords: [remoteRecord],
+    timestamp: "2026-08-15T12:00:00.000Z",
+  });
+  const reconciled = dataFromRecords(plan.records).nextActions;
+
+  assert.equal(plan.conflicts.length, 1);
+  assert.equal(plan.queue.length, 1);
+  assert.ok(reconciled.some((item) => item.title === "Remote edit"));
+  assert.ok(
+    reconciled.some(
+      (item) =>
+        item.title === "Offline edit (conflitto conservato)" &&
+        item.conflictOf === "shared",
+    ),
+  );
 });
 
 test("Sync queue removes only flushed operation ids, not later replacements for the same record", () => {

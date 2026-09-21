@@ -110,6 +110,7 @@ function ProjectModal({
   actions,
   onClose,
   onDeleteProject,
+  onMoveProjectToSomedayMaybe,
   onSaveActions,
   onUpdateProject,
   project,
@@ -313,6 +314,19 @@ function ProjectModal({
 
           <div className="modal-actions">
             <button
+              className="secondary-button"
+              onClick={() => {
+                onMoveProjectToSomedayMaybe(
+                  { ...project, title },
+                  draftActions.filter((action) => action.title.trim()),
+                );
+                onClose();
+              }}
+              type="button"
+            >
+              Sposta in Prima o poi / Forse
+            </button>
+            <button
               className="secondary-button danger-button"
               onClick={() => {
                 onDeleteProject(project.id);
@@ -334,6 +348,7 @@ function ProjectModal({
 
 function ProjectsTab({
   onDeleteProject,
+  onMoveProjectToSomedayMaybe,
   onSaveProjectActions,
   onUpdateProject,
   onScheduleTask,
@@ -459,6 +474,7 @@ function ProjectsTab({
             .sort((left, right) => (left.order || 0) - (right.order || 0))}
           onClose={() => setEditingProject(null)}
           onDeleteProject={onDeleteProject}
+          onMoveProjectToSomedayMaybe={onMoveProjectToSomedayMaybe}
           onSaveActions={onSaveProjectActions}
           onUpdateProject={onUpdateProject}
           project={editingProject}
@@ -572,6 +588,7 @@ export default function GtdPage({
   onDeleteArchiveItem,
   onDownloadArchiveAttachment,
   onDeleteProject,
+  onMoveProjectToSomedayMaybe,
   onDeleteSomedayMaybe,
   onDeleteWaitingFor,
   onNavigate,
@@ -618,6 +635,7 @@ export default function GtdPage({
           {activeTab === "projects" && (
             <ProjectsTab
               onDeleteProject={onDeleteProject}
+              onMoveProjectToSomedayMaybe={onMoveProjectToSomedayMaybe}
               onSaveProjectActions={onSaveProjectActions}
               onUpdateProject={onUpdateProject}
               onScheduleTask={onScheduleTask}
