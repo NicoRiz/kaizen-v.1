@@ -600,13 +600,14 @@ export default function CalendarPanel({
 
                         setEditingItem(item);
                       }}
-                      onContextMenu={(event) => {
-                        if (touchDragRef.current?.item.id === item.id) {
-                          event.preventDefault();
-                        }
-                      }}
+                      onContextMenu={(event) => event.preventDefault()}
                       onDragEnd={() => setDropTargetDate(null)}
                       onDragStart={(event) => {
+                        if (touchDragRef.current?.item.id === item.id) {
+                          event.preventDefault();
+                          return;
+                        }
+
                         event.dataTransfer.effectAllowed = "move";
                         event.dataTransfer.setData(
                           CALENDAR_ITEM_DRAG_TYPE,
