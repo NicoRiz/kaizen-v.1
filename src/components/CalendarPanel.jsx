@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, dateKey, parseDateKey } from "../utils/date.js";
 import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
 import {
@@ -6,6 +6,11 @@ import {
   parseTaskDragPayload,
   TASK_DRAG_TYPE,
 } from "../lib/calendarScheduling.js";
+
+const TOUCH_DRAG_DELAY_MS = 320;
+const TOUCH_MOVE_TOLERANCE_PX = 10;
+const TOUCH_EDGE_SCROLL_ZONE_PX = 72;
+const TOUCH_EDGE_SCROLL_SPEED_PX = 12;
 
 function formatDayLabel(value) {
   return new Intl.DateTimeFormat("it-IT", {
@@ -222,6 +227,9 @@ export default function CalendarPanel({
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [dropTargetDate, setDropTargetDate] = useState(null);
   const [pendingTaskSchedule, setPendingTaskSchedule] = useState(null);
+  const [touchDrag, setTouchDrag] = useState(null);
+  const touchDragRef = useRef(null);
+  const suppressClickUntilRef = useRef(0);
   const days = useMemo(() => {
     if (view === "month") {
       return getMonthDays(cursorDate);
@@ -233,6 +241,180 @@ export default function CalendarPanel({
   const sortedItems = useMemo(() => sortItems(items), [items]);
   const periodTitle =
     view === "week" ? formatWeekTitle(days) : formatMonthTitle(cursorDate);
+
+  function clearTouchDrag() {
+    const currentDrag = touchDragRef.current;
+
+    if (currentDrag?.activationTimer) {
+      window.clearTimeout(currentDrag.activationTimer);
+    }
+    if (currentDrag?.scrollFrame) {
+      window.cancelAnimationFrame(currentDrag.scrollFrame);
+    }
+
+    touchDragRef.current = null;
+    setTouchDrag(null);
+    setDropTargetDate(null);
+  }
+
+  function findDropTargetDate(clientX, clientY) {
+    return document
+      .elementFromPoint(clientX, clientY)
+      ?.closest(".calendar-day[data-date]")
+      ?.getAttribute("data-date") || null;
+  }
+
+  useEffect(() => {
+    function handleTouchMove(event) {
+      const currentDrag = touchDragRef.current;
+
+      if (!currentDrag) {
+        return;
+      }
+
+      if (event.touches.length !== 1) {
+        clearTouchDrag();
+        return;
+      }
+
+      const touch = event.touches[0];
+      const movedDistance = Math.hypot(
+        touch.clientX - currentDrag.startX,
+        touch.clientY - currentDrag.startY,
+      );
+
+      if (!currentDrag.active) {
+        if (movedDistance > TOUCH_MOVE_TOLERANCE_PX) {
+          clearTouchDrag();
+        }
+        return;
+      }
+
+      event.preventDefault();
+      currentDrag.clientX = touch.clientX;
+      currentDrag.clientY = touch.clientY;
+      const targetDate = findDropTargetDate(touch.clientX, touch.clientY);
+      setDropTargetDate(targetDate);
+      setTouchDrag((current) =>
+        current
+          ? { ...current, clientX: touch.clientX, clientY: touch.clientY }
+          : current,
+      );
+
+      const scrollDirection =
+        touch.clientY < TOUCH_EDGE_SCROLL_ZONE_PX
+          ? -1
+          : touch.clientY > window.innerHeight - TOUCH_EDGE_SCROLL_ZONE_PX
+            ? 1
+            : 0;
+
+      if (scrollDirection !== currentDrag.scrollDirection) {
+        if (currentDrag.scrollFrame) {
+          window.cancelAnimationFrame(currentDrag.scrollFrame);
+          currentDrag.scrollFrame = null;
+        }
+
+        currentDrag.scrollDirection = scrollDirection;
+
+        if (scrollDirection) {
+          const scrollAtEdge = () => {
+            const activeDrag = touchDragRef.current;
+
+            if (!activeDrag?.active || !activeDrag.scrollDirection) {
+              return;
+            }
+
+            window.scrollBy(0, activeDrag.scrollDirection * TOUCH_EDGE_SCROLL_SPEED_PX);
+            setDropTargetDate(
+              findDropTargetDate(activeDrag.clientX, activeDrag.clientY),
+            );
+            activeDrag.scrollFrame = window.requestAnimationFrame(scrollAtEdge);
+          };
+
+          currentDrag.scrollFrame = window.requestAnimationFrame(scrollAtEdge);
+        }
+      }
+    }
+
+    function handleTouchEnd(event) {
+      const currentDrag = touchDragRef.current;
+
+      if (!currentDrag) {
+        return;
+      }
+
+      if (!currentDrag.active) {
+        clearTouchDrag();
+        return;
+      }
+
+      event.preventDefault();
+      const touch = event.changedTouches[0];
+      const targetDate = touch
+        ? findDropTargetDate(touch.clientX, touch.clientY)
+        : null;
+
+      suppressClickUntilRef.current = performance.now() + 500;
+      clearTouchDrag();
+
+      if (targetDate && targetDate !== currentDrag.item.date) {
+        onSaveItem({ ...currentDrag.item, date: targetDate });
+      }
+    }
+
+    document.addEventListener("touchmove", handleTouchMove, { passive: false });
+    document.addEventListener("touchend", handleTouchEnd, { passive: false });
+    document.addEventListener("touchcancel", clearTouchDrag);
+
+    return () => {
+      const currentDrag = touchDragRef.current;
+      if (currentDrag?.activationTimer) {
+        window.clearTimeout(currentDrag.activationTimer);
+      }
+      document.removeEventListener("touchmove", handleTouchMove);
+      document.removeEventListener("touchend", handleTouchEnd);
+      document.removeEventListener("touchcancel", clearTouchDrag);
+    };
+  }, [onSaveItem]);
+
+  function handleEventTouchStart(event, item) {
+    if (event.touches.length !== 1) {
+      clearTouchDrag();
+      return;
+    }
+
+    const touch = event.touches[0];
+    const eventRect = event.currentTarget.getBoundingClientRect();
+    const pendingDrag = {
+      active: false,
+      activationTimer: null,
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+      grabOffsetX: touch.clientX - eventRect.left,
+      grabOffsetY: touch.clientY - eventRect.top,
+      item,
+      scrollDirection: 0,
+      scrollFrame: null,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      width: eventRect.width,
+    };
+
+    pendingDrag.activationTimer = window.setTimeout(() => {
+      const currentDrag = touchDragRef.current;
+
+      if (currentDrag !== pendingDrag) {
+        return;
+      }
+
+      currentDrag.active = true;
+      currentDrag.activationTimer = null;
+      setDropTargetDate(item.date);
+      setTouchDrag({ ...currentDrag });
+    }, TOUCH_DRAG_DELAY_MS);
+
+    touchDragRef.current = pendingDrag;
+  }
 
   function moveCursor(direction) {
     setCursorDate((currentDate) =>
@@ -405,10 +587,24 @@ export default function CalendarPanel({
                 <div className="calendar-events">
                   {dayItems.map((item) => (
                     <button
-                      className="calendar-event"
+                      className={`calendar-event ${
+                        touchDrag?.item.id === item.id ? "is-touch-dragging" : ""
+                      }`}
                       draggable
                       key={item.id}
-                      onClick={() => setEditingItem(item)}
+                      onClick={(event) => {
+                        if (performance.now() < suppressClickUntilRef.current) {
+                          event.preventDefault();
+                          return;
+                        }
+
+                        setEditingItem(item);
+                      }}
+                      onContextMenu={(event) => {
+                        if (touchDragRef.current?.item.id === item.id) {
+                          event.preventDefault();
+                        }
+                      }}
                       onDragEnd={() => setDropTargetDate(null)}
                       onDragStart={(event) => {
                         event.dataTransfer.effectAllowed = "move";
@@ -417,6 +613,7 @@ export default function CalendarPanel({
                           item.id,
                         );
                       }}
+                      onTouchStart={(event) => handleEventTouchStart(event, item)}
                       type="button"
                     >
                       <span>{item.startTime || "Tutto il giorno"}</span>
@@ -429,6 +626,21 @@ export default function CalendarPanel({
           );
         })}
       </div>
+
+      {touchDrag && (
+        <div
+          aria-hidden="true"
+          className="calendar-event calendar-event-drag-overlay"
+          style={{
+            left: touchDrag.clientX - touchDrag.grabOffsetX,
+            top: touchDrag.clientY - touchDrag.grabOffsetY,
+            width: touchDrag.width,
+          }}
+        >
+          <span>{touchDrag.item.startTime || "Tutto il giorno"}</span>
+          <strong>{touchDrag.item.title}</strong>
+        </div>
+      )}
 
       {(editingItem || isCreatingItem) && (
         <EventModal
