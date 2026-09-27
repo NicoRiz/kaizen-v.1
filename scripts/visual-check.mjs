@@ -85,8 +85,15 @@ localStorage.setItem('kaizen:v1:gtd:calendarItems', JSON.stringify([
   { id: 'event-a', title: 'Evento test', description: 'Verifica responsive', date: '2026-08-15', allDay: true, startTime: null, endTime: null, createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' }
 ]));
 localStorage.setItem('kaizen:v1:gtd:projects', JSON.stringify([
-  { id: 'project-a', title: 'Progetto test', createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' }
+  { id: 'project-a', title: 'Finire il libro', areaId: 'area-a', progressTracking: 'quantitative', progressUnit: 'pagine', currentValue: 126, targetValue: 352, status: 'active', createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' }
 ]));
+localStorage.setItem('kaizen:v1:areas', JSON.stringify([
+  { id: 'area-a', name: 'Psicologia', color: '#741b34', description: 'Conoscere meglio la mente', status: 'active', createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' }
+]));
+localStorage.setItem('kaizen:v1:habits', JSON.stringify([
+  { id: 'habit-a', name: 'Studiare Cialdini', areaId: 'area-a', projectId: 'project-a', status: 'active', type: 'quantitative', frequency: 'daily', weekdays: [], timesPerWeek: null, unit: 'pagine', minimum: 2, target: 10, startDate: '2026-01-01', scheduledTime: null, updateProjectProgress: true, pausedRanges: [], createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' }
+]));
+localStorage.setItem('kaizen:v1:habitLogs', JSON.stringify([]));
 `;
 
 async function waitForJson(url, timeoutMs = 8000) {
@@ -171,7 +178,44 @@ async function capture(page, viewport, name) {
   });
 
   await writeFile(join(OUT_DIR, `visual-${name}.png`), Buffer.from(screenshot.data, "base64"));
-  return metrics.result.value;
+  const sectionChecks = {};
+  const sections = [
+    ["GTD", ".gtd-tab-panel"],
+    ["Abitudini", ".habit-management-card"],
+    ["Areas", ".area-card"],
+    ["Progressi", ".rhythm-chart"],
+    ["Note", ".note-hub-grid"],
+    ["Focus", ".today-panel"],
+  ];
+
+  for (const [label, selector] of sections) {
+    await page.send("Runtime.evaluate", {
+      expression: `([...document.querySelectorAll('.bottom-nav-link')].find((item) => item.innerText === ${JSON.stringify(label)}))?.click()`,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const sectionResult = await page.send("Runtime.evaluate", {
+      returnByValue: true,
+      expression: `(() => ({
+        rendered: Boolean(document.querySelector(${JSON.stringify(selector)})),
+        overflowX: document.documentElement.scrollWidth > window.innerWidth,
+        errorOverlay: Boolean(document.querySelector('.vite-error-overlay'))
+      }))()`,
+    });
+    sectionChecks[label] = sectionResult.result.value;
+
+    if (name === "desktop" && label !== "Focus") {
+      const sectionScreenshot = await page.send("Page.captureScreenshot", {
+        captureBeyondViewport: true,
+        format: "png",
+      });
+      await writeFile(
+        join(OUT_DIR, `visual-${name}-${label.toLowerCase()}.png`),
+        Buffer.from(sectionScreenshot.data, "base64"),
+      );
+    }
+  }
+
+  return { ...metrics.result.value, sectionChecks };
 }
 
 const profileDir = join(tmpdir(), `kaizen-visual-${Date.now()}`);
@@ -220,15 +264,15 @@ try {
 }
 
 function assertVisualResult(result, name) {
-  if (!result.text.includes("KAIZEN")) {
-    throw new Error(`${name}: KAIZEN shell not rendered`);
+  if (!result.text.includes("Focus")) {
+    throw new Error(`${name}: Focus shell not rendered`);
   }
 
   if (result.overflowX) {
     throw new Error(`${name}: horizontal overflow detected`);
   }
 
-  for (const item of ["GTD", "Home", "Note"]) {
+  for (const item of ["Focus", "GTD", "Abitudini", "Areas", "Progressi", "Note"]) {
     if (!result.navItems.includes(item)) {
       throw new Error(`${name}: missing nav item ${item}`);
     }
@@ -236,5 +280,11 @@ function assertVisualResult(result, name) {
 
   if (!result.syncStatus) {
     throw new Error(`${name}: missing sync status`);
+  }
+
+  for (const [section, check] of Object.entries(result.sectionChecks)) {
+    if (!check.rendered || check.overflowX || check.errorOverlay) {
+      throw new Error(`${name}: ${section} failed ${JSON.stringify(check)}`);
+    }
   }
 }

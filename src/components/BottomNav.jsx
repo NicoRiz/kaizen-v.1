@@ -1,11 +1,23 @@
 const NAV_ITEMS = [
   {
+    key: "home",
+    label: "Focus",
+  },
+  {
     key: "gtd",
     label: "GTD",
   },
   {
-    key: "home",
-    label: "Home",
+    key: "habits",
+    label: "Abitudini",
+  },
+  {
+    key: "areas",
+    label: "Areas",
+  },
+  {
+    key: "progress",
+    label: "Progressi",
   },
   {
     key: "note",

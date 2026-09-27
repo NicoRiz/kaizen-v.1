@@ -18,6 +18,9 @@ export const STORAGE_KEYS = {
   waitingFor: "kaizen:v1:gtd:waitingFor",
   somedayMaybe: "kaizen:v1:gtd:somedayMaybe",
   archiveItems: "kaizen:v1:gtd:archiveItems",
+  areas: "kaizen:v1:areas",
+  habits: "kaizen:v1:habits",
+  habitLogs: "kaizen:v1:habitLogs",
   migration: "kaizen:v1:gtd:migration",
   syncCache: "kaizen:v1:sync:cache",
   syncQueue: "kaizen:v1:sync:queue",
@@ -25,7 +28,7 @@ export const STORAGE_KEYS = {
   deviceId: "kaizen:v1:deviceId",
 };
 
-export const MIGRATION_VERSION = 1;
+export const MIGRATION_VERSION = 2;
 
 export const COLLECTIONS = [
   { name: "legacyTasks", storageKey: STORAGE_KEYS.legacyTasks, kind: "array", fallback: [] },
@@ -107,6 +110,14 @@ export const COLLECTIONS = [
   {
     name: "archiveItems",
     storageKey: STORAGE_KEYS.archiveItems,
+    kind: "array",
+    fallback: [],
+  },
+  { name: "areas", storageKey: STORAGE_KEYS.areas, kind: "array", fallback: [] },
+  { name: "habits", storageKey: STORAGE_KEYS.habits, kind: "array", fallback: [] },
+  {
+    name: "habitLogs",
+    storageKey: STORAGE_KEYS.habitLogs,
     kind: "array",
     fallback: [],
   },

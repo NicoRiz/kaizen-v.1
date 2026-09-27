@@ -14,6 +14,7 @@ const NON_ACTION_DESTINATIONS = [
 ];
 
 export default function ClarifyInboxModal({
+  areas = [],
   item,
   onClose,
   onSubmit,
@@ -25,6 +26,7 @@ export default function ClarifyInboxModal({
   );
   const [actionable, setActionable] = useState("yes");
   const [projectId, setProjectId] = useState("");
+  const [areaId, setAreaId] = useState("");
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [nextActionTitle, setNextActionTitle] = useState("");
   const [destination, setDestination] = useState("next-actions");
@@ -80,6 +82,7 @@ export default function ClarifyInboxModal({
     try {
       await onSubmit({
       actionable: actionable === "yes",
+      areaId,
       clarifiedText,
       date,
       description,
@@ -198,6 +201,16 @@ export default function ClarifyInboxModal({
                   type="text"
                   value={nextActionTitle}
                 />
+              </label>
+
+              <label>
+                Area opzionale
+                <select onChange={(event) => setAreaId(event.target.value)} value={areaId}>
+                  <option value="">Senza Area</option>
+                  {areas.filter((area) => area.status !== "archived").map((area) => (
+                    <option key={area.id} value={area.id}>{area.name}</option>
+                  ))}
+                </select>
               </label>
 
               <fieldset>

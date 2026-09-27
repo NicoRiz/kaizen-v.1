@@ -3,6 +3,8 @@ import BottomNav from "./BottomNav.jsx";
 import CalendarPanel from "./CalendarPanel.jsx";
 import ClarifyInboxModal from "./ClarifyInboxModal.jsx";
 import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
+import TodayHabits from "./TodayHabits.jsx";
+import { AreaBadge } from "./ProgressUi.jsx";
 import {
   createTaskDragPayload,
   TASK_DRAG_TYPE,
@@ -19,17 +21,22 @@ function inboxCounterLabel(count) {
 
 export default function Home({
   activeSection,
+  areas,
   calendarItems,
   date,
   inboxItems,
+  habitLogs,
+  habits,
   nextActions,
   onAddInboxItem,
   onClarifyInboxItem,
   onDeleteCalendarItem,
   onNavigate,
+  onLogHabit,
   onSaveCalendarItem,
   onScheduleTask,
   onToggleNextAction,
+  onUpdateNextActionArea,
   projects,
 }) {
   const [captureText, setCaptureText] = useState("");
@@ -71,17 +78,9 @@ export default function Home({
         <header className="topbar">
           <div>
             <p className="eyebrow">{formatDisplayDate(date)}</p>
-            <h1>KAIZEN</h1>
+            <h1>Focus</h1>
           </div>
         </header>
-
-        <CalendarPanel
-          items={calendarItems}
-          onDeleteItem={onDeleteCalendarItem}
-          onSaveItem={onSaveCalendarItem}
-          onScheduleTask={onScheduleTask}
-          today={date}
-        />
 
         <section className="panel capture-panel">
           <div className="section-heading">
@@ -110,6 +109,22 @@ export default function Home({
             </button>
           </form>
         </section>
+
+        <TodayHabits
+          areas={areas}
+          habits={habits}
+          logs={habitLogs}
+          onLog={onLogHabit}
+          today={date}
+        />
+
+        <CalendarPanel
+          items={calendarItems}
+          onDeleteItem={onDeleteCalendarItem}
+          onSaveItem={onSaveCalendarItem}
+          onScheduleTask={onScheduleTask}
+          today={date}
+        />
 
         <section className="panel">
           <div className="section-heading">
@@ -175,7 +190,24 @@ export default function Home({
                   </label>
                   <div className="task-content">
                     <strong>{action.title}</strong>
+                    <AreaBadge
+                      area={areas.find((area) => area.id === action.areaId)}
+                      subtle
+                    />
                   </div>
+                  <select
+                    aria-label={`Area di ${action.title}`}
+                    className="inline-area-select"
+                    onChange={(event) =>
+                      onUpdateNextActionArea(action.id, event.target.value || null)
+                    }
+                    value={action.areaId || ""}
+                  >
+                    <option value="">Senza Area</option>
+                    {areas.filter((area) => area.status !== "archived").map((area) => (
+                      <option key={area.id} value={area.id}>{area.name}</option>
+                    ))}
+                  </select>
                   <button
                     aria-label={`Pianifica ${action.title} nel calendario`}
                     className="secondary-button schedule-button"
@@ -251,6 +283,7 @@ export default function Home({
 
       {clarifyingItem && (
         <ClarifyInboxModal
+          areas={areas}
           item={clarifyingItem}
           onClose={() => setClarifyingItem(null)}
           onSubmit={async (result) => {

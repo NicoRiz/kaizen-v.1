@@ -141,7 +141,7 @@ try {
 
   const openedOffline = await evaluate(
     offline.page,
-    "document.body.innerText.includes('KAIZEN')",
+    "document.body.innerText.includes('Focus')",
   );
   assert.equal(openedOffline, true);
 
@@ -162,7 +162,7 @@ try {
   await evaluate(
     offline.page,
     `(() => {
-      document.querySelector('button[aria-label="Home"]')?.click();
+      document.querySelector('button[aria-label="Focus"]')?.click();
       return true;
     })()`,
   );

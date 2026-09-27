@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AuthScreen from "./components/AuthScreen.jsx";
+import AreasPage from "./components/AreasPage.jsx";
 import GtdPage from "./components/GtdPage.jsx";
+import HabitsPage from "./components/HabitsPage.jsx";
 import Home from "./components/Home.jsx";
 import NotesHub from "./components/NotesHub.jsx";
 import NotesSection from "./components/NotesSection.jsx";
 import SyncStatus from "./components/SyncStatus.jsx";
+import ProgressPage from "./components/ProgressPage.jsx";
 import { useKaizenSync } from "./hooks/useKaizenSync.js";
 import { STORAGE_KEYS } from "./lib/kaizenData.js";
 import {
@@ -12,17 +15,25 @@ import {
   createId,
   nowIso,
 } from "./lib/syncCore.js";
-import { dateKey } from "./utils/date.js";
+import { addDays, dateKey } from "./utils/date.js";
 import { readStorage, writeStorage } from "./utils/storage.js";
 import {
   createScheduledCalendarItem,
   updateCalendarItemInCollection,
 } from "./lib/calendarScheduling.js";
+import {
+  deleteHabitLog as deleteHabitLogFromData,
+  reconcileHabitContributions,
+  upsertHabitLog,
+} from "./lib/habits.js";
 
 const PRIMARY_SECTIONS = {
+  areas: "areas",
   gtd: "gtd",
+  habits: "habits",
   home: "home",
   note: "note",
+  progress: "progress",
 };
 
 const NOTE_SECTIONS = {
@@ -90,8 +101,11 @@ export default function App() {
 
   const today = useMemo(() => dateKey(), []);
   const {
+    areas,
     archiveItems,
     calendarItems,
+    habitLogs,
+    habits,
     inboxItems,
     legacyTasks,
     nextActions,
@@ -235,6 +249,9 @@ export default function App() {
 
   function navigate(section) {
     setActiveSection(section);
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
     if (section !== PRIMARY_SECTIONS.note) {
       setActiveNoteSection(null);
     }
@@ -305,7 +322,7 @@ export default function App() {
     ]);
   }
 
-  function createProject(title) {
+  function createProject(title, areaId = null) {
     const cleanTitle = title.trim();
 
     if (!cleanTitle) {
@@ -316,6 +333,8 @@ export default function App() {
     const project = {
       id: createId(),
       title: cleanTitle,
+      areaId,
+      progressTracking: "none",
       status: "active",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -336,7 +355,8 @@ export default function App() {
       const nextActionTitle = result.nextActionTitle.trim() || inboxItemTitle;
 
       if (result.destination === "projects") {
-        const projectId = result.projectId || createProject(result.newProjectTitle)?.id;
+        const projectId =
+          result.projectId || createProject(result.newProjectTitle, result.areaId || null)?.id;
 
         if (!projectId) {
           return;
@@ -355,6 +375,7 @@ export default function App() {
             updatedAt: timestamp,
             completedAt: null,
             sourceInboxItemId: itemId,
+            areaId: result.areaId || null,
           },
         ]);
       }
@@ -372,6 +393,7 @@ export default function App() {
             completedAt: null,
             sourceInboxItemId: itemId,
             clarifiedText,
+            areaId: result.areaId || null,
           },
         ]);
       }
@@ -503,6 +525,201 @@ export default function App() {
     });
   }
 
+  function updateNextActionArea(actionId, areaId) {
+    const timestamp = nowIso();
+    updateCollection("nextActions", (currentActions) =>
+      currentActions.map((action) =>
+        action.id === actionId
+          ? { ...action, areaId: areaId || null, updatedAt: timestamp }
+          : action,
+      ),
+    );
+  }
+
+  function saveArea(areaInput) {
+    const timestamp = nowIso();
+    const name = areaInput.name.trim();
+    if (!name) return;
+
+    updateCollection("areas", (currentAreas) => {
+      if (areaInput.id) {
+        return currentAreas.map((area) =>
+          area.id === areaInput.id
+            ? {
+                ...area,
+                name,
+                color: areaInput.color,
+                description: (areaInput.description || "").trim(),
+                updatedAt: timestamp,
+              }
+            : area,
+        );
+      }
+
+      return [
+        ...currentAreas,
+        {
+          id: createId(),
+          name,
+          color: areaInput.color,
+          description: (areaInput.description || "").trim(),
+          status: "active",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ];
+    });
+  }
+
+  function setAreaStatus(areaId, status) {
+    const timestamp = nowIso();
+    updateCollection("areas", (currentAreas) =>
+      currentAreas.map((area) =>
+        area.id === areaId ? { ...area, status, updatedAt: timestamp } : area,
+      ),
+    );
+  }
+
+  function normalizeHabitInput(input, existing, timestamp) {
+    const type = input.type === "quantitative" ? "quantitative" : "boolean";
+    const frequency = ["daily", "weekdays", "weekly"].includes(input.frequency)
+      ? input.frequency
+      : "daily";
+    return {
+      ...existing,
+      id: existing?.id || createId(),
+      name: input.name.trim(),
+      areaId: input.areaId,
+      projectId: input.projectId || null,
+      status: existing?.status || "active",
+      type,
+      frequency,
+      weekdays:
+        frequency === "weekdays"
+          ? [...new Set((input.weekdays || []).map(Number))]
+          : [],
+      timesPerWeek: frequency === "weekly" ? Math.max(1, Number(input.timesPerWeek) || 1) : null,
+      unit: type === "quantitative" ? (input.unit || "").trim() : null,
+      minimum:
+        type === "quantitative" && input.minimum !== ""
+          ? Math.max(0, Number(input.minimum) || 0)
+          : null,
+      target:
+        type === "quantitative" && frequency !== "weekly"
+          ? Math.max(0.01, Number(input.target) || 1)
+          : 1,
+      startDate: input.startDate,
+      scheduledTime: input.scheduledTime || null,
+      updateProjectProgress: Boolean(input.updateProjectProgress && input.projectId),
+      pausedRanges: existing?.pausedRanges || [],
+      createdAt: existing?.createdAt || timestamp,
+      updatedAt: timestamp,
+    };
+  }
+
+  function saveHabit(habitInput) {
+    const timestamp = nowIso();
+    updateCollections(["habits", "habitLogs", "projects"], (currentData) => {
+      const existing = currentData.habits.find((habit) => habit.id === habitInput.id);
+      const habit = normalizeHabitInput(habitInput, existing, timestamp);
+      const reconciled = reconcileHabitContributions({
+        habitBefore: existing,
+        habitAfter: habit,
+        habitLogs: currentData.habitLogs,
+        projects: currentData.projects,
+        timestamp,
+      });
+
+      return {
+        ...currentData,
+        habits: existing
+          ? currentData.habits.map((item) => (item.id === habit.id ? habit : item))
+          : [...currentData.habits, habit],
+        habitLogs: reconciled.habitLogs,
+        projects: reconciled.projects,
+      };
+    });
+  }
+
+  function setHabitStatus(habitId, status) {
+    const timestamp = nowIso();
+    updateCollection("habits", (currentHabits) =>
+      currentHabits.map((habit) => {
+        if (habit.id !== habitId) return habit;
+
+        const pausedRanges = [...(habit.pausedRanges || [])];
+        if (status === "paused" && habit.status !== "paused") {
+          pausedRanges.push({ startedOn: today, endedOn: null });
+        }
+        if (status === "active") {
+          const openIndex = pausedRanges.findLastIndex((range) => !range.endedOn);
+          if (openIndex >= 0) {
+            pausedRanges[openIndex] = {
+              ...pausedRanges[openIndex],
+              endedOn: addDays(today, -1),
+            };
+          }
+        }
+
+        return {
+          ...habit,
+          status,
+          pausedRanges,
+          archivedAt: status === "archived" ? timestamp : null,
+          updatedAt: timestamp,
+        };
+      }),
+    );
+  }
+
+  function saveHabitLog(habitId, input) {
+    const timestamp = nowIso();
+    updateCollections(["habitLogs", "projects"], (currentData) => {
+      const habit = currentData.habits.find((item) => item.id === habitId);
+      if (!habit) return currentData;
+
+      let sourceLogs = currentData.habitLogs;
+      let sourceProjects = currentData.projects;
+      const previous = input.previousLogId
+        ? sourceLogs.find((log) => log.id === input.previousLogId)
+        : null;
+
+      if (previous && previous.date !== input.date) {
+        const removed = deleteHabitLogFromData({
+          habitLogs: sourceLogs,
+          logId: previous.id,
+          projects: sourceProjects,
+          timestamp,
+        });
+        sourceLogs = removed.habitLogs;
+        sourceProjects = removed.projects;
+      }
+
+      const result = upsertHabitLog({
+        habit,
+        habitLogs: sourceLogs,
+        input,
+        projects: sourceProjects,
+        id: previous?.date === input.date ? previous.id : createId(),
+        timestamp,
+      });
+      return { ...currentData, habitLogs: result.habitLogs, projects: result.projects };
+    });
+  }
+
+  function deleteHabitLog(logId) {
+    const timestamp = nowIso();
+    updateCollections(["habitLogs", "projects"], (currentData) => {
+      const result = deleteHabitLogFromData({
+        habitLogs: currentData.habitLogs,
+        logId,
+        projects: currentData.projects,
+        timestamp,
+      });
+      return { ...currentData, ...result };
+    });
+  }
+
   function scheduleTaskInCalendar(sourceTask, schedule) {
     const timestamp = nowIso();
     const calendarItem = createScheduledCalendarItem({
@@ -536,6 +753,7 @@ export default function App() {
         project.id === projectInput.id
           ? {
               ...project,
+              ...projectInput,
               title: projectInput.title.trim(),
               updatedAt: timestamp,
             }
@@ -551,6 +769,47 @@ export default function App() {
     updateCollection("projectActions", (currentActions) =>
       currentActions.filter((action) => action.projectId !== projectId),
     );
+  }
+
+  function createDetailedProject(projectInput, actions = []) {
+    const timestamp = nowIso();
+    const title = projectInput.title.trim();
+    if (!title) return;
+    const projectId = createId();
+    const project = {
+      id: projectId,
+      title,
+      areaId: projectInput.areaId || null,
+      progressTracking: projectInput.progressTracking || "none",
+      progressUnit:
+        projectInput.progressTracking === "quantitative"
+          ? (projectInput.progressUnit || "").trim()
+          : null,
+      currentValue:
+        projectInput.progressTracking === "quantitative"
+          ? Math.max(0, Number(projectInput.currentValue) || 0)
+          : null,
+      targetValue:
+        projectInput.progressTracking === "quantitative"
+          ? Math.max(0.01, Number(projectInput.targetValue) || 1)
+          : null,
+      status: "active",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    updateCollections(["projects", "projectActions"], (currentData) => ({
+      ...currentData,
+      projects: [...currentData.projects, project],
+      projectActions: [
+        ...currentData.projectActions,
+        ...normalizeProjectActions(
+          projectId,
+          actions.filter((action) => action.title.trim()),
+          timestamp,
+        ),
+      ],
+    }));
   }
 
   function moveProjectToSomedayMaybe(projectInput, actionsInput) {
@@ -763,13 +1022,74 @@ export default function App() {
     );
   }
 
+  if (activeSection === PRIMARY_SECTIONS.habits) {
+    return (
+      <>
+        <SyncStatus sync={sync} />
+        <HabitsPage
+          activeSection={activeSection}
+          areas={areas}
+          habits={habits}
+          logs={habitLogs}
+          onDeleteLog={deleteHabitLog}
+          onNavigate={navigate}
+          onSaveHabit={saveHabit}
+          onSaveLog={saveHabitLog}
+          onSetHabitStatus={setHabitStatus}
+          projects={projects}
+          today={today}
+        />
+      </>
+    );
+  }
+
+  if (activeSection === PRIMARY_SECTIONS.areas) {
+    return (
+      <>
+        <SyncStatus sync={sync} />
+        <AreasPage
+          activeSection={activeSection}
+          areas={areas}
+          habits={habits}
+          logs={habitLogs}
+          nextActions={nextActions}
+          onNavigate={navigate}
+          onSaveArea={saveArea}
+          onSetAreaStatus={setAreaStatus}
+          projectActions={projectActions}
+          projects={projects}
+          today={today}
+        />
+      </>
+    );
+  }
+
+  if (activeSection === PRIMARY_SECTIONS.progress) {
+    return (
+      <>
+        <SyncStatus sync={sync} />
+        <ProgressPage
+          activeSection={activeSection}
+          areas={areas.filter((area) => area.status !== "archived")}
+          habits={habits}
+          logs={habitLogs}
+          onNavigate={navigate}
+          projects={projects}
+          today={today}
+        />
+      </>
+    );
+  }
+
   if (activeSection === PRIMARY_SECTIONS.gtd) {
     return (
       <>
         <SyncStatus sync={sync} />
         <GtdPage
           activeSection={activeSection}
+          areas={areas}
           archiveItems={archiveItems}
+          onCreateProject={createDetailedProject}
           onDeleteArchiveItem={deleteArchiveItem}
           onDownloadArchiveAttachment={sync.downloadArchiveAttachment}
           onDeleteProject={deleteProject}
@@ -839,17 +1159,22 @@ export default function App() {
       <SyncStatus sync={sync} />
       <Home
         activeSection={activeSection}
+        areas={areas}
         calendarItems={calendarItems}
         date={today}
+        habitLogs={habitLogs}
+        habits={habits}
         inboxItems={inboxItems}
         nextActions={nextActions}
         onAddInboxItem={addInboxItem}
         onClarifyInboxItem={clarifyInboxItem}
+        onLogHabit={saveHabitLog}
         onNavigate={navigate}
         onSaveCalendarItem={saveCalendarItem}
         onScheduleTask={scheduleTaskInCalendar}
         onDeleteCalendarItem={deleteCalendarItem}
         onToggleNextAction={toggleNextAction}
+        onUpdateNextActionArea={updateNextActionArea}
         projects={projects.filter((project) => project.status !== "someday")}
       />
     </>

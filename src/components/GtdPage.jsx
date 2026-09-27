@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import BottomNav from "./BottomNav.jsx";
 import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
+import { AreaBadge, ProjectProgress } from "./ProgressUi.jsx";
 
 const TABS = [
   { key: "projects", label: "Progetti" },
@@ -107,9 +108,11 @@ function BasicItemModal({
 }
 
 function ProjectModal({
+  areas,
   actions,
   moveLabel,
   onClose,
+  onCreateProject,
   onDeleteProject,
   onMoveProject,
   onSaveActions,
@@ -117,6 +120,13 @@ function ProjectModal({
   project,
 }) {
   const [title, setTitle] = useState(project.title);
+  const [areaId, setAreaId] = useState(project.areaId || "");
+  const [progressTracking, setProgressTracking] = useState(
+    project.progressTracking || "none",
+  );
+  const [progressUnit, setProgressUnit] = useState(project.progressUnit || "");
+  const [currentValue, setCurrentValue] = useState(project.currentValue ?? 0);
+  const [targetValue, setTargetValue] = useState(project.targetValue ?? "");
   const [draftActions, setDraftActions] = useState(
     actions.map((action) => ({ ...action })),
   );
@@ -193,11 +203,23 @@ function ProjectModal({
       return;
     }
 
-    onUpdateProject({ ...project, title });
-    onSaveActions(
-      project.id,
-      draftActions.filter((action) => action.title.trim()),
-    );
+    const projectInput = {
+      ...project,
+      title,
+      areaId: areaId || null,
+      progressTracking,
+      progressUnit: progressTracking === "quantitative" ? progressUnit.trim() : null,
+      currentValue: progressTracking === "quantitative" ? Number(currentValue) || 0 : null,
+      targetValue: progressTracking === "quantitative" ? Number(targetValue) || 0 : null,
+    };
+    const cleanActions = draftActions.filter((action) => action.title.trim());
+
+    if (project.id) {
+      onUpdateProject(projectInput);
+      onSaveActions(project.id, cleanActions);
+    } else {
+      onCreateProject(projectInput, cleanActions);
+    }
     onClose();
   }
 
@@ -212,7 +234,7 @@ function ProjectModal({
         <div className="modal-heading">
           <div>
             <p className="eyebrow">Progetto</p>
-            <h2 id="project-modal-title">Modifica progetto</h2>
+            <h2 id="project-modal-title">{project.id ? "Modifica progetto" : "Nuovo Project"}</h2>
           </div>
           <button
             aria-label="Chiudi"
@@ -234,6 +256,42 @@ function ProjectModal({
               value={title}
             />
           </label>
+
+          <div className="form-grid">
+            <label>
+              Area opzionale
+              <select onChange={(event) => setAreaId(event.target.value)} value={areaId}>
+                <option value="">Senza Area</option>
+                {areas.filter((area) => area.status !== "archived").map((area) => (
+                  <option key={area.id} value={area.id}>{area.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Avanzamento
+              <select onChange={(event) => setProgressTracking(event.target.value)} value={progressTracking}>
+                <option value="none">Nessuno</option>
+                <option value="quantitative">Quantitativo</option>
+              </select>
+            </label>
+          </div>
+
+          {progressTracking === "quantitative" && (
+            <div className="form-grid form-grid--three">
+              <label>
+                Unità
+                <input onChange={(event) => setProgressUnit(event.target.value)} placeholder="pagine, €, km…" value={progressUnit} />
+              </label>
+              <label>
+                Valore attuale
+                <input min="0" onChange={(event) => setCurrentValue(event.target.value)} step="any" type="number" value={currentValue} />
+              </label>
+              <label>
+                Target
+                <input min="0.01" onChange={(event) => setTargetValue(event.target.value)} required step="any" type="number" value={targetValue} />
+              </label>
+            </div>
+          )}
 
           <fieldset>
             <legend>Azioni del progetto</legend>
@@ -314,7 +372,7 @@ function ProjectModal({
           </fieldset>
 
           <div className="modal-actions">
-            {onMoveProject && (
+            {project.id && onMoveProject && (
               <button
                 className="secondary-button"
                 onClick={() => {
@@ -329,16 +387,18 @@ function ProjectModal({
                 {moveLabel}
               </button>
             )}
-            <button
-              className="secondary-button danger-button"
-              onClick={() => {
-                onDeleteProject(project.id);
-                onClose();
-              }}
-              type="button"
-            >
-              Elimina
-            </button>
+            {project.id && (
+              <button
+                className="secondary-button danger-button"
+                onClick={() => {
+                  onDeleteProject(project.id);
+                  onClose();
+                }}
+                type="button"
+              >
+                Elimina
+              </button>
+            )}
             <button className="submit-button" disabled={!title.trim()} type="submit">
               Salva
             </button>
@@ -350,8 +410,10 @@ function ProjectModal({
 }
 
 function ProjectsTab({
+  areas,
   emptyMessage = "Nessun progetto.",
   moveLabel,
+  onCreateProject,
   onDeleteProject,
   onMoveProject,
   onSaveProjectActions,
@@ -375,6 +437,22 @@ function ProjectsTab({
 
   return (
     <section className="gtd-tab-panel">
+      <div className="list-toolbar project-toolbar">
+        <button
+          className="add-button"
+          onClick={() =>
+            setEditingProject({
+              id: "",
+              title: "",
+              status: "active",
+              progressTracking: "none",
+            })
+          }
+          type="button"
+        >
+          Nuovo Project
+        </button>
+      </div>
       {projects.length === 0 ? (
         <p className="empty-state">{emptyMessage}</p>
       ) : (
@@ -405,6 +483,15 @@ function ProjectsTab({
                   >
                     ...
                   </button>
+                </div>
+
+                <div className="project-card-meta">
+                  <AreaBadge area={areas.find((area) => area.id === project.areaId)} subtle />
+                  <ProjectProgress
+                    area={areas.find((area) => area.id === project.areaId)}
+                    compact
+                    project={project}
+                  />
                 </div>
 
                 {isExpanded && (
@@ -474,10 +561,12 @@ function ProjectsTab({
 
       {editingProject && (
         <ProjectModal
+          areas={areas}
           actions={projectActions
             .filter((action) => action.projectId === editingProject.id)
             .sort((left, right) => (left.order || 0) - (right.order || 0))}
           onClose={() => setEditingProject(null)}
+          onCreateProject={onCreateProject}
           moveLabel={moveLabel}
           onDeleteProject={onDeleteProject}
           onMoveProject={onMoveProject}
@@ -590,8 +679,10 @@ function EditableList({
 
 export default function GtdPage({
   activeSection,
+  areas,
   archiveItems,
   onDeleteArchiveItem,
+  onCreateProject,
   onDownloadArchiveAttachment,
   onDeleteProject,
   onMoveProjectToSomedayMaybe,
@@ -641,6 +732,8 @@ export default function GtdPage({
 
           {activeTab === "projects" && (
             <ProjectsTab
+              areas={areas}
+              onCreateProject={onCreateProject}
               onDeleteProject={onDeleteProject}
               moveLabel="Sposta in Prima o poi / Forse"
               onMoveProject={onMoveProjectToSomedayMaybe}
@@ -666,6 +759,8 @@ export default function GtdPage({
           {activeTab === "someday" && (
             <>
               <ProjectsTab
+                areas={areas}
+                onCreateProject={onCreateProject}
                 emptyMessage="Nessun progetto in Prima o poi / Forse."
                 moveLabel="Sposta in Progetti"
                 onDeleteProject={onDeleteProject}
