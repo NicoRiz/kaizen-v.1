@@ -215,13 +215,14 @@ function EventModal({ item, onClose, onDelete, onSubmit, today }) {
 }
 
 export default function CalendarPanel({
+  initialView = "week",
   items,
   onDeleteItem,
   onSaveItem,
   onScheduleTask,
   today,
 }) {
-  const [view, setView] = useState("week");
+  const [view, setView] = useState(initialView === "month" ? "month" : "week");
   const [cursorDate, setCursorDate] = useState(today);
   const [editingItem, setEditingItem] = useState(null);
   const [isCreatingItem, setIsCreatingItem] = useState(false);
@@ -557,7 +558,7 @@ export default function CalendarPanel({
       </div>
 
       <div className={`calendar-grid calendar-grid--${view}`}>
-        {days.map((day) => {
+        {days.map((day, dayIndex) => {
           const dayItems = sortedItems.filter((item) => item.date === day);
           const isToday = day === today;
 
@@ -568,6 +569,14 @@ export default function CalendarPanel({
               }`}
               data-date={day}
               key={day}
+              style={
+                view === "month" && dayIndex === 0
+                  ? {
+                      gridColumnStart:
+                        ((parseDateKey(day).getDay() + 6) % 7) + 1,
+                    }
+                  : undefined
+              }
               onDragLeave={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget)) {
                   setDropTargetDate(null);
@@ -587,6 +596,9 @@ export default function CalendarPanel({
                 <div className="calendar-events">
                   {dayItems.map((item) => (
                     <button
+                      aria-label={`${item.title}, ${formatDayLabel(day)}${
+                        item.startTime ? ` alle ${item.startTime}` : ""
+                      }`}
                       className={`calendar-event ${
                         touchDrag?.item.id === item.id ? "is-touch-dragging" : ""
                       }`}

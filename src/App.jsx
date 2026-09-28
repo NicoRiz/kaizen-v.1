@@ -4,6 +4,7 @@ import AreasPage from "./components/AreasPage.jsx";
 import GtdPage from "./components/GtdPage.jsx";
 import HabitsPage from "./components/HabitsPage.jsx";
 import Home from "./components/Home.jsx";
+import HomeCalendarPage from "./components/HomeCalendarPage.jsx";
 import NotesHub from "./components/NotesHub.jsx";
 import NotesSection from "./components/NotesSection.jsx";
 import SyncStatus from "./components/SyncStatus.jsx";
@@ -26,9 +27,11 @@ import {
   reconcileHabitContributions,
   upsertHabitLog,
 } from "./lib/habits.js";
+import { parseAppRoute, routeForSection } from "./lib/navigation.js";
 
 const PRIMARY_SECTIONS = {
   areas: "areas",
+  calendar: "calendar",
   gtd: "gtd",
   habits: "habits",
   home: "home",
@@ -71,6 +74,10 @@ function initialKaizenData() {
   return createCachedKaizenData();
 }
 
+function currentAppRoute() {
+  return parseAppRoute(typeof window !== "undefined" ? window.location.hash : "");
+}
+
 function normalizeProjectActions(projectId, actions, timestamp) {
   return actions.map((action, index) => ({
     ...action,
@@ -91,13 +98,44 @@ export default function App() {
   const [migration, setMigration] = useState(() =>
     readStorage(STORAGE_KEYS.migration, {}),
   );
-  const [activeSection, setActiveSection] = useState(PRIMARY_SECTIONS.home);
-  const [activeNoteSection, setActiveNoteSection] = useState(null);
+  const [activeSection, setActiveSection] = useState(
+    () => currentAppRoute().section,
+  );
+  const [activeNoteSection, setActiveNoteSection] = useState(
+    () => {
+      const noteSection = currentAppRoute().noteSection;
+      return NOTE_SECTIONS[noteSection] ? noteSection : null;
+    },
+  );
   const replaceKaizenData = useCallback((nextData) => {
     kaizenDataRef.current = nextData;
     setKaizenData(nextData);
   }, []);
   const sync = useKaizenSync({ onReplaceData: replaceKaizenData });
+
+  useEffect(() => {
+    function applyRoute() {
+      const route = currentAppRoute();
+      const noteSection = NOTE_SECTIONS[route.noteSection]
+        ? route.noteSection
+        : null;
+      const canonicalHash =
+        route.section === PRIMARY_SECTIONS.note && route.noteSection && !noteSection
+          ? routeForSection(PRIMARY_SECTIONS.note)
+          : route.canonicalHash;
+
+      setActiveSection(route.section);
+      setActiveNoteSection(noteSection);
+
+      if (window.location.hash !== canonicalHash) {
+        window.history.replaceState(null, "", canonicalHash);
+      }
+    }
+
+    applyRoute();
+    window.addEventListener("hashchange", applyRoute);
+    return () => window.removeEventListener("hashchange", applyRoute);
+  }, []);
 
   const today = useMemo(() => dateKey(), []);
   const {
@@ -247,13 +285,18 @@ export default function App() {
     sync.trackDataChange(collectionNames, nextData);
   }
 
-  function navigate(section) {
-    setActiveSection(section);
+  function navigate(section, noteSection = null) {
+    const nextHash = routeForSection(section, noteSection);
+
+    if (window.location.hash === nextHash) {
+      setActiveSection(section);
+      setActiveNoteSection(section === PRIMARY_SECTIONS.note ? noteSection : null);
+    } else {
+      window.location.hash = nextHash;
+    }
+
     if (typeof window !== "undefined") {
       window.scrollTo({ top: 0, behavior: "auto" });
-    }
-    if (section !== PRIMARY_SECTIONS.note) {
-      setActiveNoteSection(null);
     }
   }
 
@@ -1022,6 +1065,23 @@ export default function App() {
     );
   }
 
+  if (activeSection === PRIMARY_SECTIONS.calendar) {
+    return (
+      <>
+        <SyncStatus sync={sync} />
+        <HomeCalendarPage
+          activeSection={activeSection}
+          calendarItems={calendarItems}
+          date={today}
+          onDeleteCalendarItem={deleteCalendarItem}
+          onNavigate={navigate}
+          onSaveCalendarItem={saveCalendarItem}
+          onScheduleTask={scheduleTaskInCalendar}
+        />
+      </>
+    );
+  }
+
   if (activeSection === PRIMARY_SECTIONS.habits) {
     return (
       <>
@@ -1128,7 +1188,7 @@ export default function App() {
           emptyMessage={activeSectionConfig.emptyMessage}
           eyebrow={activeSectionConfig.eyebrow}
           notes={activeSectionNotes}
-          onBack={() => setActiveNoteSection(null)}
+          onBack={() => navigate(PRIMARY_SECTIONS.note)}
           onDeleteNote={deleteSectionNote}
           onNavigate={navigate}
           onSaveNote={(note) => saveSectionNote(activeNoteSection, note)}
@@ -1148,7 +1208,7 @@ export default function App() {
           noteSections={NOTE_SECTIONS}
           notes={sectionNotes}
           onNavigate={navigate}
-          onOpenSection={setActiveNoteSection}
+          onOpenSection={(section) => navigate(PRIMARY_SECTIONS.note, section)}
         />
       </>
     );
@@ -1160,7 +1220,6 @@ export default function App() {
       <Home
         activeSection={activeSection}
         areas={areas}
-        calendarItems={calendarItems}
         date={today}
         habitLogs={habitLogs}
         habits={habits}
@@ -1170,9 +1229,7 @@ export default function App() {
         onClarifyInboxItem={clarifyInboxItem}
         onLogHabit={saveHabitLog}
         onNavigate={navigate}
-        onSaveCalendarItem={saveCalendarItem}
         onScheduleTask={scheduleTaskInCalendar}
-        onDeleteCalendarItem={deleteCalendarItem}
         onToggleNextAction={toggleNextAction}
         onUpdateNextActionArea={updateNextActionArea}
         projects={projects.filter((project) => project.status !== "someday")}

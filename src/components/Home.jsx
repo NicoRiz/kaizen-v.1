@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import BottomNav from "./BottomNav.jsx";
-import CalendarPanel from "./CalendarPanel.jsx";
 import ClarifyInboxModal from "./ClarifyInboxModal.jsx";
+import HomeSectionNav from "./HomeSectionNav.jsx";
 import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
 import TodayHabits from "./TodayHabits.jsx";
 import { AreaBadge } from "./ProgressUi.jsx";
@@ -22,7 +22,6 @@ function inboxCounterLabel(count) {
 export default function Home({
   activeSection,
   areas,
-  calendarItems,
   date,
   inboxItems,
   habitLogs,
@@ -30,10 +29,8 @@ export default function Home({
   nextActions,
   onAddInboxItem,
   onClarifyInboxItem,
-  onDeleteCalendarItem,
   onNavigate,
   onLogHabit,
-  onSaveCalendarItem,
   onScheduleTask,
   onToggleNextAction,
   onUpdateNextActionArea,
@@ -82,6 +79,8 @@ export default function Home({
           </div>
         </header>
 
+        <HomeSectionNav activeSection="home" onNavigate={onNavigate} />
+
         <section className="panel capture-panel">
           <div className="section-heading">
             <div>
@@ -115,14 +114,7 @@ export default function Home({
           habits={habits}
           logs={habitLogs}
           onLog={onLogHabit}
-          today={date}
-        />
-
-        <CalendarPanel
-          items={calendarItems}
-          onDeleteItem={onDeleteCalendarItem}
-          onSaveItem={onSaveCalendarItem}
-          onScheduleTask={onScheduleTask}
+          onOpenHabits={() => onNavigate("habits")}
           today={date}
         />
 

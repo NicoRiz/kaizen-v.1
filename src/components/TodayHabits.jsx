@@ -113,7 +113,14 @@ function HabitQuickLog({ area, habit, logs, onLog, today }) {
   );
 }
 
-export default function TodayHabits({ areas, habits, logs, onLog, today }) {
+export default function TodayHabits({
+  areas,
+  habits,
+  logs,
+  onLog,
+  onOpenHabits,
+  today,
+}) {
   const dueHabits = habits.filter(
     (habit) => habit.status === "active" && isHabitDueOnDate(habit, today),
   );
@@ -125,7 +132,16 @@ export default function TodayHabits({ areas, habits, logs, onLog, today }) {
           <p className="eyebrow">Oggi</p>
           <h2>Abitudini rilevanti</h2>
         </div>
-        <span className="counter">{dueHabits.length}</span>
+        <div className="section-heading-actions">
+          <button
+            className="text-link-button"
+            onClick={onOpenHabits}
+            type="button"
+          >
+            Vai alle abitudini
+          </button>
+          <span className="counter">{dueHabits.length}</span>
+        </div>
       </div>
 
       {dueHabits.length === 0 ? (

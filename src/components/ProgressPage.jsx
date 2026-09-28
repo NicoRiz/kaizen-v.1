@@ -7,6 +7,7 @@ import {
 } from "../lib/habits.js";
 import { dateKey } from "../utils/date.js";
 import BottomNav from "./BottomNav.jsx";
+import HomeSectionNav from "./HomeSectionNav.jsx";
 import { AreaBadge, ProjectProgress } from "./ProgressUi.jsx";
 
 const PERIODS = [
@@ -117,6 +118,7 @@ export default function ProgressPage({ activeSection, areas, habits, logs, onNav
     <div className="app-shell">
       <main className="home">
         <header className="topbar section-topbar"><div><p className="eyebrow">Andamento nel tempo</p><h1>Progressi</h1></div></header>
+        <HomeSectionNav activeSection="progress" onNavigate={onNavigate} />
         <section className="panel">
           <div className="tab-list progress-tabs" role="tablist"><button className={view === "rhythm" ? "is-selected" : ""} onClick={() => setView("rhythm")} role="tab" type="button">Ritmo</button><button className={view === "advancement" ? "is-selected" : ""} onClick={() => setView("advancement")} role="tab" type="button">Avanzamento</button></div>
           {view === "rhythm" ? <RhythmView areas={areas} habits={habits} logs={logs} today={today} /> : <AdvancementView areas={areas} projects={projects} />}

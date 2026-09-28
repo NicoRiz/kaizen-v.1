@@ -162,7 +162,7 @@ try {
   await evaluate(
     offline.page,
     `(() => {
-      document.querySelector('button[aria-label="Focus"]')?.click();
+      document.querySelector('button[aria-label="Home"]')?.click();
       return true;
     })()`,
   );

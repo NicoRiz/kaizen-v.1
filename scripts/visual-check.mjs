@@ -179,31 +179,25 @@ async function capture(page, viewport, name) {
 
   await writeFile(join(OUT_DIR, `visual-${name}.png`), Buffer.from(screenshot.data, "base64"));
   const sectionChecks = {};
-  const sections = [
-    ["GTD", ".gtd-tab-panel"],
-    ["Abitudini", ".habit-management-card"],
-    ["Areas", ".area-card"],
-    ["Progressi", ".rhythm-chart"],
-    ["Note", ".note-hub-grid"],
-    ["Focus", ".today-panel"],
-  ];
 
-  for (const [label, selector] of sections) {
+  async function clickAndCheck(label, clickExpression, selector, expectedHash) {
     await page.send("Runtime.evaluate", {
-      expression: `([...document.querySelectorAll('.bottom-nav-link')].find((item) => item.innerText === ${JSON.stringify(label)}))?.click()`,
+      expression: clickExpression,
     });
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 180));
     const sectionResult = await page.send("Runtime.evaluate", {
       returnByValue: true,
       expression: `(() => ({
         rendered: Boolean(document.querySelector(${JSON.stringify(selector)})),
         overflowX: document.documentElement.scrollWidth > window.innerWidth,
-        errorOverlay: Boolean(document.querySelector('.vite-error-overlay'))
+        errorOverlay: Boolean(document.querySelector('.vite-error-overlay')),
+        hash: window.location.hash,
+        expectedHash: ${JSON.stringify(expectedHash)}
       }))()`,
     });
     sectionChecks[label] = sectionResult.result.value;
 
-    if (name === "desktop" && label !== "Focus") {
+    if ((name === "desktop" && label !== "Focus") || label === "Calendario") {
       const sectionScreenshot = await page.send("Page.captureScreenshot", {
         captureBeyondViewport: true,
         format: "png",
@@ -214,6 +208,58 @@ async function capture(page, viewport, name) {
       );
     }
   }
+
+  const bottomNavClick = (label) =>
+    `([...document.querySelectorAll('.bottom-nav-link')].find((item) => item.innerText === ${JSON.stringify(label)}))?.click()`;
+  const homeNavClick = (label) =>
+    `([...document.querySelectorAll('.home-section-nav button')].find((item) => item.innerText === ${JSON.stringify(label)}))?.click()`;
+
+  await clickAndCheck("GTD", bottomNavClick("GTD"), ".gtd-tab-panel", "#/gtd");
+  await clickAndCheck("Focus", bottomNavClick("Home"), ".today-panel", "#/home/focus");
+  await clickAndCheck(
+    "Calendario",
+    homeNavClick("Calendario"),
+    ".home-calendar-page .calendar-grid--month",
+    "#/home/calendar",
+  );
+  await clickAndCheck(
+    "Areas",
+    `([...document.querySelectorAll('button')].find((item) => item.innerText === 'Vai alle Areas'))?.click()`,
+    ".area-card",
+    "#/home/areas",
+  );
+
+  await page.send("Runtime.evaluate", { expression: "history.back()" });
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  await clickAndCheck(
+    "CalendarioBack",
+    "void 0",
+    ".home-calendar-page .calendar-grid--month",
+    "#/home/calendar",
+  );
+  await page.send("Runtime.evaluate", { expression: "history.forward()" });
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  await clickAndCheck("AreasForward", "void 0", ".area-card", "#/home/areas");
+
+  await clickAndCheck("FocusReturn", bottomNavClick("Home"), ".today-panel", "#/home/focus");
+  await clickAndCheck(
+    "Abitudini",
+    `([...document.querySelectorAll('button')].find((item) => item.innerText === 'Vai alle abitudini'))?.click()`,
+    ".habit-management-card",
+    "#/home/habits",
+  );
+  await clickAndCheck("FocusAgain", bottomNavClick("Home"), ".today-panel", "#/home/focus");
+  await clickAndCheck(
+    "Progressi",
+    homeNavClick("Progressi"),
+    ".rhythm-chart",
+    "#/home/progress",
+  );
+  await page.send("Page.reload", { ignoreCache: true });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await clickAndCheck("ProgressiRefresh", "void 0", ".rhythm-chart", "#/home/progress");
+  await clickAndCheck("Note", bottomNavClick("Note"), ".note-hub-grid", "#/notes");
+  await clickAndCheck("HomeFinal", bottomNavClick("Home"), ".today-panel", "#/home/focus");
 
   return { ...metrics.result.value, sectionChecks };
 }
@@ -272,7 +318,7 @@ function assertVisualResult(result, name) {
     throw new Error(`${name}: horizontal overflow detected`);
   }
 
-  for (const item of ["Focus", "GTD", "Abitudini", "Areas", "Progressi", "Note"]) {
+  for (const item of ["GTD", "Home", "Note"]) {
     if (!result.navItems.includes(item)) {
       throw new Error(`${name}: missing nav item ${item}`);
     }
@@ -283,7 +329,12 @@ function assertVisualResult(result, name) {
   }
 
   for (const [section, check] of Object.entries(result.sectionChecks)) {
-    if (!check.rendered || check.overflowX || check.errorOverlay) {
+    if (
+      !check.rendered ||
+      check.overflowX ||
+      check.errorOverlay ||
+      check.hash !== check.expectedHash
+    ) {
       throw new Error(`${name}: ${section} failed ${JSON.stringify(check)}`);
     }
   }

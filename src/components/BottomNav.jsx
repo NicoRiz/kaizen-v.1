@@ -1,23 +1,13 @@
+import { primaryNavSection } from "../lib/navigation.js";
+
 const NAV_ITEMS = [
-  {
-    key: "home",
-    label: "Focus",
-  },
   {
     key: "gtd",
     label: "GTD",
   },
   {
-    key: "habits",
-    label: "Abitudini",
-  },
-  {
-    key: "areas",
-    label: "Areas",
-  },
-  {
-    key: "progress",
-    label: "Progressi",
+    key: "home",
+    label: "Home",
   },
   {
     key: "note",
@@ -26,11 +16,13 @@ const NAV_ITEMS = [
 ];
 
 export default function BottomNav({ activeSection = "home", onNavigate }) {
+  const primarySection = primaryNavSection(activeSection);
+
   return (
     <nav className="bottom-nav" aria-label="Navigazione principale">
       <div className="bottom-nav-inner">
         {NAV_ITEMS.map((item) => {
-          const isActive = activeSection === item.key;
+          const isActive = primarySection === item.key;
 
           return (
             <button
