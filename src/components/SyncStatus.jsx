@@ -120,6 +120,7 @@ export default function SyncStatus({ sync }) {
 
   return (
     <>
+      {sync.storageError && <div className="storage-warning" role="alert">{sync.storageError} <button className="secondary-button" onClick={sync.exportBackup}>Esporta backup</button></div>}
       <button
         className={`sync-status sync-status--${sync.status}`}
         onClick={() => setIsOpen(true)}

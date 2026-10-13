@@ -215,6 +215,7 @@ function EventModal({ item, onClose, onDelete, onSubmit, today }) {
 }
 
 export default function CalendarPanel({
+  onOpenPriority,
   initialView = "week",
   items,
   onDeleteItem,
@@ -602,7 +603,7 @@ export default function CalendarPanel({
                       className={`calendar-event ${
                         touchDrag?.item.id === item.id ? "is-touch-dragging" : ""
                       }`}
-                      draggable
+                      draggable={!item.priorityDate}
                       key={item.id}
                       onClick={(event) => {
                         if (performance.now() < suppressClickUntilRef.current) {
@@ -610,7 +611,8 @@ export default function CalendarPanel({
                           return;
                         }
 
-                        setEditingItem(item);
+                        if (item.priorityDate) onOpenPriority?.(item.priorityDate);
+                        else setEditingItem(item);
                       }}
                       onContextMenu={(event) => event.preventDefault()}
                       onDragEnd={() => setDropTargetDate(null)}
@@ -626,7 +628,7 @@ export default function CalendarPanel({
                           item.id,
                         );
                       }}
-                      onTouchStart={(event) => handleEventTouchStart(event, item)}
+                      onTouchStart={(event) => { if (!item.priorityDate) handleEventTouchStart(event, item); }}
                       type="button"
                     >
                       <span>{item.startTime || "Tutto il giorno"}</span>

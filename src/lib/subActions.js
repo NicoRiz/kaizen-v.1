@@ -88,8 +88,8 @@ export function applySubActionCommand(data, command, { id, timestamp }) {
   }
   if (!current) return data;
   if (command.type === "delete") return append([revision(current, { deleted: true })]);
-  if (command.type === "attach" && validParent) return append([revision(current, { parentActionId: parentId })]);
-  if (command.type === "rename" && command.title?.trim()) return append([revision(current, { title: command.title.trim() })]);
+  if (command.type === "attach" && validParent) return current.parentActionId === parentId ? data : append([revision(current, { parentActionId: parentId })]);
+  if (command.type === "rename" && command.title?.trim()) return current.title === command.title.trim() ? data : append([revision(current, { title: command.title.trim() })]);
   if (command.type === "toggle") return append([revision(current, { completed: !current.completed, completedAt: current.completed ? null : timestamp })]);
   if (command.type === "move" && [-1, 1].includes(command.direction)) {
     const siblings = subActionsFor(items, current.parentActionId);

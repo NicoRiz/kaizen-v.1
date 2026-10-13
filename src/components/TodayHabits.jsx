@@ -134,7 +134,7 @@ export default function TodayHabits({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Oggi</p>
-          <h2>Abitudini rilevanti</h2>
+          <h2>Abitudini di oggi</h2>
         </div>
         <div className="section-heading-actions">
           <button

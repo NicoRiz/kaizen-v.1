@@ -1,5 +1,6 @@
 import { habitProgressForDate, isHabitDueOnDate } from "./habits.js";
 import { activeProjectActions } from "./subActions.js";
+import { dayHeads } from './dayPlans.js';
 
 // Counts are projections, never persisted or queued for sync. Calendar entries
 // only schedule their source action, so they do not create another commitment.
@@ -27,10 +28,12 @@ export function selectAttention(data, today) {
   const inbox = new Set((data.inboxItems || []).filter((item) => item.status === "open")
     .map((item) => item.conflictOf || item.id)).size;
   const activeActions = activeProjectActions(data);
-  const next = countPendingActions(data.nextActions) + countPendingActions(activeActions.filter((action) => action.showInNextActions));
+  const priorityProjects = new Set(dayHeads(data.dayPlans, today).flatMap(plan => plan.priorities.filter(p => p.ref.collection === 'projectActions').map(p => p.ref.id)));
+  const belongsToFocus = action => action.showInNextActions || priorityProjects.has(action.id);
+  const next = countPendingActions(data.nextActions) + countPendingActions(activeActions.filter(belongsToFocus));
   // A shared action belongs to the Focus navigation total once promoted.
   // Its project still shows its local progress, without adding another nav item.
-  const projects = countPendingActions(activeActions.filter((action) => !action.showInNextActions));
+  const projects = countPendingActions(activeActions.filter((action) => !belongsToFocus(action)));
   return { inbox, next, projects, daily: habits.dailyPending, weekly: habits.weeklyPending,
     focus: inbox + next + habits.dailyPending + habits.weeklyPending };
 }

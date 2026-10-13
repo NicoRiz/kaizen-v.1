@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { appendDay, changeDay, dayHeads, emptyDay, observeDayOutcomes, priorityCompleted, refKey } from './lib/dayPlans.js';
+import { planCalendarItems } from './lib/timeBlocking.js';
 import AuthScreen from "./components/AuthScreen.jsx";
 import AreasPage from "./components/AreasPage.jsx";
 import GtdPage from "./components/GtdPage.jsx";
@@ -101,6 +103,7 @@ function normalizeProjectActions(projectId, actions, timestamp, currentActions =
 
 export default function App() {
   const [kaizenData, setKaizenData] = useState(initialKaizenData);
+  const [focusPlanDate, setFocusPlanDate] = useState(null);
   const kaizenDataRef = useRef(kaizenData);
   const [migration, setMigration] = useState(() =>
     readStorage(STORAGE_KEYS.migration, {}),
@@ -282,18 +285,60 @@ export default function App() {
 
   function updateCollections(collectionNames, updater) {
     const currentData = kaizenDataRef.current;
-    const nextData = updater(currentData);
+    let nextData = updater(currentData);
 
     if (Object.is(currentData, nextData)) {
-      return;
+      return true;
     }
 
+    nextData = observeDayOutcomes(currentData, nextData, today, { id: createId(), timestamp: nowIso() });
+    const changedCollections = nextData.dayPlans !== currentData.dayPlans ? [...collectionNames, 'dayPlans'] : collectionNames;
+    if (sync.trackDataChange(changedCollections, nextData) === false) return false;
     kaizenDataRef.current = nextData;
     setKaizenData(nextData);
-    sync.trackDataChange(collectionNames, nextData);
+    return true;
   }
 
-  function navigate(section, noteSection = null) {
+  function commandDay(command) {
+    return updateCollections(['dayPlans'], data => changeDay(data, command, { id: createId(), timestamp: nowIso() }));
+  }
+
+  function createPriority(title, date, baseId) {
+    if (!title.trim()) return false;
+    const timestamp = nowIso(), id = createId();
+    return updateCollections(['nextActions', 'dayPlans'], data => {
+      const next = { ...data, nextActions: [...data.nextActions, { id, title: title.trim(), completed: false, completedAt: null, order: data.nextActions.length, createdAt: timestamp, updatedAt: timestamp }] };
+      return changeDay(next, { type: 'add', date, baseId, ref: { collection: 'nextActions', id } }, { id: createId(), timestamp });
+    });
+  }
+
+  function togglePriority(priority, date) {
+    if (date !== today) return;
+    if (priority.ref.collection !== 'habits') { toggleNextAction(priority.ref.id, priority.ref.collection); return; }
+    const habit = kaizenDataRef.current.habits.find(h => h.id === priority.ref.id);
+    if (!habit) return;
+    const done = priorityCompleted(kaizenDataRef.current, priority, date);
+    saveHabitLog(habit.id, { date, completed: !done, ...(habit.type === 'quantitative' ? { quantity: done ? 0 : habit.frequency === 'weekly' ? 1 : Number(habit.target || habit.minimum || 1) } : {}) });
+  }
+
+  function reschedulePriority(priority, sourcePlan, targetDate) {
+    if (!targetDate || targetDate === sourcePlan.date) return false;
+    const timestamp = nowIso();
+    return updateCollections(['dayPlans'], data => {
+      const sourceHeads = dayHeads(data.dayPlans, sourcePlan.date), targetHeads = dayHeads(data.dayPlans, targetDate);
+      if (sourceHeads.length !== 1 || sourceHeads[0].id !== sourcePlan.id || targetHeads.length > 1) throw new Error('Il piano è cambiato o contiene conflitti. Rivedilo prima di riprogrammare.');
+      const target = targetHeads[0] || emptyDay(targetDate, sourcePlan.timeZone);
+      if (target.mode === 'rest') throw new Error('Il giorno scelto è dedicato al riposo. Modifica prima il suo piano.');
+      if (target.priorities.some(p => refKey(p.ref) === refKey(priority.ref))) throw new Error('Questa attività è già una priorità del giorno scelto.');
+      const moved = { ...priority, block: null, outcome: 'incomplete', observedAt: timestamp };
+      let next = appendDay(data, { ...target, priorities: [...target.priorities, moved], reason: 'rescheduled', rescheduledFrom: sourcePlan.date }, { id: createId(), timestamp, baseIds: target.id ? [target.id] : [] });
+      next = changeDay(next, { type: 'remove', date: sourcePlan.date, baseId: sourcePlan.id, key: refKey(priority.ref), reason: `rescheduled:${targetDate}` }, { id: createId(), timestamp });
+      return next;
+    });
+  }
+
+  function navigate(section, noteSection = null, planDate = null) {
+    setFocusPlanDate(section === PRIMARY_SECTIONS.home ? planDate : null);
     const nextHash = routeForSection(section, noteSection);
 
     if (window.location.hash === nextHash) {
@@ -555,6 +600,11 @@ export default function App() {
   }
 
   function saveCalendarItem(itemInput) {
+    if (itemInput.id?.startsWith('priority:')) {
+      const block = planCalendarItems(kaizenDataRef.current).find(item => item.id === itemInput.id);
+      if (block) navigate(PRIMARY_SECTIONS.home, null, block.priorityDate);
+      return;
+    }
     const timestamp = nowIso();
     const cleanTitle = itemInput.title.trim();
 
@@ -803,6 +853,11 @@ export default function App() {
   }
 
   function deleteCalendarItem(itemId) {
+    if (itemId.startsWith('priority:')) {
+      const block = planCalendarItems(kaizenDataRef.current).find(item => item.id === itemId);
+      if (block) commandDay({ type: 'patch', date: block.priorityDate, baseId: block.priorityRevision, key: block.priorityKey, patch: { block: null } });
+      return;
+    }
     updateCollection("calendarItems", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
@@ -1092,7 +1147,8 @@ export default function App() {
         <SyncStatus sync={sync} />
         <HomeCalendarPage
           activeSection={activeSection}
-          calendarItems={calendarItems}
+          calendarItems={[...calendarItems, ...planCalendarItems(kaizenData)]}
+          onOpenPriority={(date) => navigate(PRIMARY_SECTIONS.home, null, date)}
           date={today}
           onDeleteCalendarItem={deleteCalendarItem}
           onNavigate={navigate}
@@ -1239,6 +1295,11 @@ export default function App() {
     <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
       <SyncStatus sync={sync} />
       <Home
+        onDayCommand={commandDay}
+        onCreatePriority={createPriority}
+        onTogglePriority={togglePriority}
+        onReschedulePriority={reschedulePriority}
+        focusPlanDate={focusPlanDate}
         activeSection={activeSection}
         areas={areas}
         date={today}

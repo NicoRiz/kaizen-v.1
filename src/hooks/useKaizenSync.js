@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { COLLECTIONS, MIGRATION_VERSION } from "../lib/kaizenData.js";
+import { COLLECTIONS, MIGRATION_VERSION, STORAGE_KEYS } from "../lib/kaizenData.js";
+import { writeStorageBatch } from '../utils/storage.js';
 import { fetchAllRemoteRecords } from "../lib/remoteRecords.js";
 import {
   SUPABASE_AUTH_STORAGE_KEY,
@@ -115,6 +116,7 @@ export function useKaizenSync({ onReplaceData }) {
       : STATUS.localOnly,
   );
   const [message, setMessage] = useState("");
+  const [storageError, setStorageError] = useState('');
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(
     () => readSyncMeta().lastSuccessfulSyncAt || "",
@@ -375,10 +377,15 @@ export function useKaizenSync({ onReplaceData }) {
 
   const replaceFromRecords = useCallback(
     (records) => {
-      recordsRef.current = records;
-      writeSyncCache(records);
       const nextData = dataFromRecords(records);
-      writeLegacyData(nextData);
+      if (!writeStorageBatch([
+        ...COLLECTIONS.map(c => [c.storageKey, nextData[c.name]]),
+        [STORAGE_KEYS.syncCache, { savedAt: new Date().toISOString(), records }],
+      ])) {
+        setStorageError('Spazio locale insufficiente: aggiornamento non salvato. Esporta un backup e libera spazio prima di riprovare.');
+        throw new Error('Local storage unavailable');
+      }
+      recordsRef.current = records;
       onReplaceData(nextData);
     },
     [onReplaceData],
@@ -511,13 +518,13 @@ export function useKaizenSync({ onReplaceData }) {
   }, [canUseCloud, replaceFromRecords, user?.id]);
 
   const enqueueRecords = useCallback(
-    (records) => {
+    (records, persistedQueue) => {
       if (records.length === 0) {
         return Promise.resolve(true);
       }
 
-      queueRef.current = mergeQueuedRecords(queueRef.current, records);
-      writeSyncQueue(queueRef.current);
+      queueRef.current = persistedQueue || mergeQueuedRecords(queueRef.current, records);
+      if (!persistedQueue) writeSyncQueue(queueRef.current);
       setStatus(
         !supabaseConfig.isConfigured
           ? STATUS.localOnly
@@ -782,8 +789,6 @@ export function useKaizenSync({ onReplaceData }) {
         return;
       }
 
-      writeLegacyData(nextData);
-
       const changes = diffDataRecords(
         recordsRef.current,
         nextData,
@@ -791,12 +796,23 @@ export function useKaizenSync({ onReplaceData }) {
       );
 
       if (changes.length === 0) {
-        return;
+        return true;
       }
 
-      recordsRef.current = applyChangedRecords(recordsRef.current, changes);
-      writeSyncCache(recordsRef.current);
-      enqueueRecords(changes);
+      const nextRecords = applyChangedRecords(recordsRef.current, changes);
+      const nextQueue = mergeQueuedRecords(queueRef.current, changes);
+      if (!writeStorageBatch([
+        ...COLLECTIONS.filter(c => validCollectionNames.includes(c.name)).map(c => [c.storageKey, nextData[c.name]]),
+        [STORAGE_KEYS.syncCache, { savedAt: new Date().toISOString(), records: nextRecords }],
+        [STORAGE_KEYS.syncQueue, nextQueue],
+      ])) {
+        setStorageError('Spazio locale insufficiente: la modifica non è stata salvata. I dati precedenti restano disponibili. Esporta un backup, libera spazio e riprova.');
+        return false;
+      }
+      setStorageError('');
+      recordsRef.current = nextRecords;
+      enqueueRecords(changes, nextQueue);
+      return true;
     },
     [enqueueRecords],
   );
@@ -1266,6 +1282,7 @@ export function useKaizenSync({ onReplaceData }) {
       signIn,
       signOut,
       status,
+      storageError,
       trackDataChange,
       uploadArchiveAttachments,
       user,
@@ -1282,6 +1299,7 @@ export function useKaizenSync({ onReplaceData }) {
       migrationInfo,
       diagnostics,
       status,
+      storageError,
       trackDataChange,
       user,
     ],

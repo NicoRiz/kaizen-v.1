@@ -82,7 +82,8 @@ async function wait(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const profileDir = join(tmpdir(), `kaizen-offline-${Date.now()}`);
+const profileRoot = resolve(process.env.KAIZEN_TEST_TMPDIR || tmpdir());
+const profileDir = join(profileRoot, `kaizen-offline-${Date.now()}`);
 await mkdir(profileDir, { recursive: true });
 
 const chrome = spawn(CHROME_PATH, [
@@ -344,7 +345,7 @@ try {
 } finally {
   chrome.kill();
   await Promise.race([once(chrome, "exit"), wait(1200)]).catch(() => {});
-  if (dirname(resolve(profileDir)) === resolve(tmpdir()) && basename(profileDir).startsWith("kaizen-offline-")) {
+  if (dirname(resolve(profileDir)) === profileRoot && basename(profileDir).startsWith("kaizen-offline-")) {
     await rm(profileDir, { recursive: true, force: true }).catch(() => {});
   }
 }

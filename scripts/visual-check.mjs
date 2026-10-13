@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { checkSubActions } from "./sub-actions-check.mjs";
+import { checkDayPlan } from './day-plan-check.mjs';
 import { once } from "node:events";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -130,7 +131,8 @@ function connect(wsUrl) {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (message.id && pending.has(message.id)) {
-      const { resolve, reject } = pending.get(message.id);
+      const { resolve, reject, timeout } = pending.get(message.id);
+      clearTimeout(timeout);
       pending.delete(message.id);
       if (message.error) {
         reject(new Error(message.error.message));
@@ -149,7 +151,8 @@ function connect(wsUrl) {
           nextId += 1;
           socket.send(JSON.stringify({ id, method, params }));
           return new Promise((commandResolve, commandReject) => {
-            pending.set(id, { resolve: commandResolve, reject: commandReject });
+            const timeout = setTimeout(() => { pending.delete(id); commandReject(new Error(`Browser timeout: ${method}`)); }, 30000);
+            pending.set(id, { resolve: commandResolve, reject: commandReject, timeout });
           });
         },
       });
@@ -191,6 +194,9 @@ async function capture(page, viewport, name) {
   await writeFile(join(OUT_DIR, `visual-${name}.png`), Buffer.from(screenshot.data, "base64"));
   await checkAttention(page, name);
   await checkSubActions(page, name, OUT_DIR);
+  console.log(`${name}: Phase 1 and 2 passed`);
+  await checkDayPlan(page, name, OUT_DIR);
+  console.log(`${name}: Phase 3 passed`);
   const sectionChecks = {};
 
   async function clickAndCheck(label, clickExpression, selector, expectedHash) {
@@ -275,7 +281,8 @@ async function capture(page, viewport, name) {
   await clickAndCheck("HomeFinal", bottomNavClick("Home"), ".today-panel", "#/home/focus");
 
   return { ...metrics.result.value, sectionChecks, attentionChecks: "passed: complete/reopen, daily/weekly, date rollover, navigation, saved records",
-    subActionChecks: "passed: create/rename/reorder/delete, complete/reopen, manual parent completion, shared record, offline reload, conflict resolution" };
+    subActionChecks: "passed: create/rename/reorder/delete, complete/reopen, manual parent completion, shared record, offline reload, conflict resolution",
+    dayPlanChecks: "passed: dated references, create/reorder/complete/reopen, habit and checklist integrity, preview/confirm/cancel, availability, manual move/duration/delete, reorganization, internal calendar, offline reload, concurrent versions, quota rollback, reschedule and rest" };
 }
 
 async function checkAttention(page, name) {
@@ -352,7 +359,8 @@ async function checkAttention(page, name) {
   assert.equal(await evaluate("location.hash"), "#/home/focus");
 }
 
-const profileDir = join(tmpdir(), `kaizen-visual-${Date.now()}`);
+const profileRoot = resolve(process.env.KAIZEN_TEST_TMPDIR || tmpdir());
+const profileDir = join(profileRoot, `kaizen-visual-${Date.now()}`);
 await mkdir(profileDir, { recursive: true });
 
 const chrome = spawn(CHROME_PATH, [
@@ -394,7 +402,7 @@ try {
     new Promise((resolve) => setTimeout(resolve, 1200)),
   ]).catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 300));
-  if (dirname(resolve(profileDir)) === resolve(tmpdir()) && basename(profileDir).startsWith("kaizen-visual-")) {
+  if (dirname(resolve(profileDir)) === profileRoot && basename(profileDir).startsWith("kaizen-visual-")) {
     await rm(profileDir, { recursive: true, force: true }).catch(() => {});
   }
 }
