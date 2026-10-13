@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { checkSubActions } from "./sub-actions-check.mjs";
 import { once } from "node:events";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const CHROME_PATH =
   process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -25,6 +27,8 @@ const fakeSession = {
 };
 
 const seedScript = `
+// This browser uses a disposable test profile, never the user's profile.
+localStorage.clear();
 localStorage.setItem('kaizen:v1:supabase:auth', ${JSON.stringify(JSON.stringify(fakeSession))});
 const visualCacheRecords = [
   {
@@ -94,6 +98,13 @@ localStorage.setItem('kaizen:v1:habits', JSON.stringify([
   { id: 'habit-a', name: 'Studiare Cialdini', areaId: 'area-a', projectId: 'project-a', status: 'active', type: 'quantitative', frequency: 'daily', weekdays: [], timesPerWeek: null, unit: 'pagine', minimum: 2, target: 10, startDate: '2026-01-01', scheduledTime: null, updateProjectProgress: true, pausedRanges: [], createdAt: '2026-08-15T09:00:00.000Z', updatedAt: '2026-08-15T09:00:00.000Z' }
 ]));
 localStorage.setItem('kaizen:v1:habitLogs', JSON.stringify([]));
+const testHabits = JSON.parse(localStorage.getItem('kaizen:v1:habits'));
+testHabits.push({ id: 'habit-week', name: 'Movimento settimanale', areaId: 'area-a', status: 'active', type: 'boolean', frequency: 'weekly', timesPerWeek: 1, startDate: '2026-01-01', pausedRanges: [] });
+localStorage.setItem('kaizen:v1:habits', JSON.stringify(testHabits));
+localStorage.setItem('kaizen:v1:gtd:projectActions', JSON.stringify([
+  { id: 'project-open', projectId: 'project-a', title: 'Azione aperta del progetto', completed: false, order: 0 },
+  { id: 'project-done', projectId: 'project-a', title: 'Azione chiusa del progetto', completed: true, order: 1 }
+]));
 `;
 
 async function waitForJson(url, timeoutMs = 8000) {
@@ -168,7 +179,7 @@ async function capture(page, viewport, name) {
       text: document.body.innerText,
       overflowX: document.documentElement.scrollWidth > window.innerWidth,
       syncStatus: document.querySelector('.sync-status')?.innerText || '',
-      navItems: [...document.querySelectorAll('.bottom-nav-link')].map((item) => item.innerText),
+      navItems: [...document.querySelectorAll('.bottom-nav-link')].map((item) => item.getAttribute('aria-label')),
       visibleButtons: [...document.querySelectorAll('button')].slice(0, 20).map((item) => item.innerText)
     }))()`,
   });
@@ -178,6 +189,8 @@ async function capture(page, viewport, name) {
   });
 
   await writeFile(join(OUT_DIR, `visual-${name}.png`), Buffer.from(screenshot.data, "base64"));
+  await checkAttention(page, name);
+  await checkSubActions(page, name, OUT_DIR);
   const sectionChecks = {};
 
   async function clickAndCheck(label, clickExpression, selector, expectedHash) {
@@ -210,9 +223,9 @@ async function capture(page, viewport, name) {
   }
 
   const bottomNavClick = (label) =>
-    `([...document.querySelectorAll('.bottom-nav-link')].find((item) => item.innerText === ${JSON.stringify(label)}))?.click()`;
+    `([...document.querySelectorAll('.bottom-nav-link')].find((item) => item.getAttribute('aria-label') === ${JSON.stringify(label)}))?.click()`;
   const homeNavClick = (label) =>
-    `([...document.querySelectorAll('.home-section-nav button')].find((item) => item.innerText === ${JSON.stringify(label)}))?.click()`;
+    `([...document.querySelectorAll('.home-section-nav button')].find((item) => item.getAttribute('aria-label') === ${JSON.stringify(label)}))?.click()`;
 
   await clickAndCheck("GTD", bottomNavClick("GTD"), ".gtd-tab-panel", "#/gtd");
   await clickAndCheck("Focus", bottomNavClick("Home"), ".today-panel", "#/home/focus");
@@ -261,7 +274,82 @@ async function capture(page, viewport, name) {
   await clickAndCheck("Note", bottomNavClick("Note"), ".note-hub-grid", "#/notes");
   await clickAndCheck("HomeFinal", bottomNavClick("Home"), ".today-panel", "#/home/focus");
 
-  return { ...metrics.result.value, sectionChecks };
+  return { ...metrics.result.value, sectionChecks, attentionChecks: "passed: complete/reopen, daily/weekly, date rollover, navigation, saved records",
+    subActionChecks: "passed: create/rename/reorder/delete, complete/reopen, manual parent completion, shared record, offline reload, conflict resolution" };
+}
+
+async function checkAttention(page, name) {
+  async function evaluate(expression) {
+    const result = await page.send("Runtime.evaluate", { expression, returnByValue: true });
+    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+    return result.result?.value;
+  }
+  async function act(expression) {
+    await evaluate(expression);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const dailyBadge = 'button.attention-badge[aria-label$="abitudini di oggi da completare"]';
+  const weeklyBadge = 'button.attention-badge[aria-label$="obiettivi settimanali da completare"]';
+  const nextBadge = 'button.attention-badge[aria-label$="prossime azioni da completare"]';
+  const exists = (selector) => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
+  assert.equal(await exists(dailyBadge), true, `${name}: daily pending`);
+  assert.equal(await exists(weeklyBadge), true, `${name}: weekly pending`);
+  await act(`document.querySelector(${JSON.stringify(dailyBadge)}).click()`);
+  assert.equal(await evaluate("Boolean(document.activeElement.closest('#daily-habits'))"), true);
+  await act(`document.querySelector(${JSON.stringify(nextBadge)}).click()`);
+  assert.equal(await evaluate("Boolean(document.activeElement.closest('#pending-next-actions'))"), true);
+  await act("document.querySelector('#pending-next-actions input[type=checkbox]').click()");
+  assert.equal(await exists(nextBadge), false, `${name}: completed action hides badge`);
+  await act("document.querySelector('.completed-toggle').click()");
+  await act("document.querySelector('.completed-action-list input[type=checkbox]').click()");
+  assert.equal(await exists(nextBadge), true, `${name}: reopened action restores badge`);
+  await act("document.querySelector('#weekly-habits button').click()");
+  assert.equal(await exists(weeklyBadge), false, `${name}: weekly target reached`);
+  await act("document.querySelector('#weekly-habits button').click()");
+  assert.equal(await exists(weeklyBadge), true, `${name}: weekly session reopened`);
+  await act("document.querySelector('#weekly-habits button').click()");
+  await act(`(() => {
+    const input = document.querySelector('#daily-habits input');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '10');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await act("document.querySelector('#daily-habits input').dispatchEvent(new FocusEvent('focusout', { bubbles: true }))");
+  assert.equal(await exists(dailyBadge), false, `${name}: quantitative target reached`);
+  await act("document.querySelector('#daily-habits button[aria-label^=Riduci]').click()");
+  assert.equal(await exists(dailyBadge), true, `${name}: quantity below target`);
+  await act("document.querySelector('#daily-habits button[aria-label^=Aumenta]').click()");
+  const savedLogs = await evaluate("localStorage.getItem('kaizen:v1:habitLogs')");
+  // Simulate returning to the app on a new local date, including next Monday.
+  await act(`(() => {
+    window.kaizenRealDate = Date;
+    window.kaizenTestNow = new Date();
+    window.kaizenTestNow.setDate(window.kaizenTestNow.getDate() + 1);
+    window.Date = class extends window.kaizenRealDate {
+      constructor(...args) { super(...(args.length ? args : [window.kaizenTestNow.getTime()])); }
+      static now() { return window.kaizenTestNow.getTime(); }
+    };
+    window.dispatchEvent(new Event('focus'));
+  })()`);
+  assert.equal(await exists(dailyBadge), true, `${name}: next day resets daily attention`);
+  await act(`(() => {
+    const now = window.kaizenTestNow;
+    now.setDate(now.getDate() + (8 - now.getDay()) % 7 + 7);
+    window.dispatchEvent(new Event('focus'));
+  })()`);
+  assert.equal(await exists(weeklyBadge), true, `${name}: new week resets weekly attention`);
+  assert.equal(await evaluate("localStorage.getItem('kaizen:v1:habitLogs')"), savedLogs, "date changes do not rewrite history");
+  await act("window.Date = window.kaizenRealDate; window.dispatchEvent(new Event('focus'))");
+  await act("document.querySelector('.bottom-nav-link[aria-label=GTD] .attention-badge').click()");
+  assert.equal(await evaluate("location.hash"), "#/gtd");
+  assert.equal(await exists(".project-toggle .attention-badge"), true);
+  await act("document.querySelector('.project-toggle .attention-badge').click()");
+  assert.equal(await exists(".project-actions input[type=checkbox]"), true);
+  await act("document.querySelector('.project-actions input[type=checkbox]').click()");
+  assert.equal(await exists(".project-toggle .attention-badge"), false);
+  await act("document.querySelector('.project-actions input[type=checkbox]').click()");
+  assert.equal(await exists(".project-toggle .attention-badge"), true);
+  await act("document.querySelector('.bottom-nav-link[aria-label=Home] .attention-badge').click()");
+  assert.equal(await evaluate("location.hash"), "#/home/focus");
 }
 
 const profileDir = join(tmpdir(), `kaizen-visual-${Date.now()}`);
@@ -306,7 +394,9 @@ try {
     new Promise((resolve) => setTimeout(resolve, 1200)),
   ]).catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 300));
-  await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+  if (dirname(resolve(profileDir)) === resolve(tmpdir()) && basename(profileDir).startsWith("kaizen-visual-")) {
+    await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 function assertVisualResult(result, name) {

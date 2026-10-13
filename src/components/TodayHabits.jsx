@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import {
   formatNumber,
   habitProgressForDate,
-  isHabitDueOnDate,
+  canonicalHabitLogs,
 } from "../lib/habits.js";
 import { AreaBadge, ProgressBar } from "./ProgressUi.jsx";
+import { selectHabitAttention } from "../lib/attention.js";
+import AttentionBadge, { focusAttentionGroup } from "./AttentionBadge.jsx";
 
 function HabitQuickLog({ area, habit, logs, onLog, today }) {
   const progress = habitProgressForDate(habit, logs, today);
@@ -25,7 +27,7 @@ function HabitQuickLog({ area, habit, logs, onLog, today }) {
   const unit = isWeekly ? "sessioni" : habit.unit || "unità";
 
   return (
-    <li className="today-habit-card">
+    <li className="today-habit-card" data-pending={progress.percentage < 100}>
       <div className="today-habit-heading">
         <div>
           <strong>{habit.name}</strong>
@@ -49,17 +51,16 @@ function HabitQuickLog({ area, habit, logs, onLog, today }) {
       {isWeekly ? (
         <button
           className="secondary-button habit-complete-button"
-          disabled={Boolean(todayLog?.completed)}
           onClick={() =>
             onLog(habit.id, {
               date: today,
-              completed: true,
-              quantity: habit.type === "quantitative" ? 1 : undefined,
+              completed: !todayLog?.completed,
+              quantity: habit.type === "quantitative" ? (todayLog?.completed ? 0 : 1) : undefined,
             })
           }
           type="button"
         >
-          {todayLog?.completed ? "Sessione registrata" : "Registra sessione"}
+          {todayLog?.completed ? "Annulla sessione di oggi" : "Registra sessione"}
         </button>
       ) : habit.type === "boolean" ? (
         <button
@@ -121,9 +122,12 @@ export default function TodayHabits({
   onOpenHabits,
   today,
 }) {
-  const dueHabits = habits.filter(
-    (habit) => habit.status === "active" && isHabitDueOnDate(habit, today),
-  );
+  const attention = selectHabitAttention(habits, logs, today);
+  const displayLogs = canonicalHabitLogs(attention.logs);
+  const groups = [
+    { id: "daily-habits", title: "Quotidiane · oggi", habits: attention.daily, count: attention.dailyPending, label: "abitudini di oggi da completare", text: "oggi" },
+    { id: "weekly-habits", title: "Settimanali · lun–dom", habits: attention.weekly, count: attention.weeklyPending, label: "obiettivi settimanali da completare", text: "settimana" },
+  ];
 
   return (
     <section className="panel today-panel">
@@ -140,25 +144,32 @@ export default function TodayHabits({
           >
             Vai alle abitudini
           </button>
-          <span className="counter">{dueHabits.length}</span>
         </div>
       </div>
 
-      {dueHabits.length === 0 ? (
+      {attention.daily.length + attention.weekly.length === 0 ? (
         <p className="empty-state">Nessuna abitudine prevista oggi.</p>
       ) : (
-        <ul className="today-habit-list">
-          {dueHabits.map((habit) => (
-            <HabitQuickLog
-              area={areas.find((area) => area.id === habit.areaId)}
-              habit={habit}
-              key={habit.id}
-              logs={logs}
-              onLog={onLog}
-              today={today}
-            />
-          ))}
-        </ul>
+        groups.filter((group) => group.habits.length > 0).map((group) => (
+          <div className="habit-attention-group" key={group.id}>
+            <div className="section-heading">
+              <h3>{group.title}</h3>
+              <AttentionBadge count={group.count} label={group.label} text={group.text} onClick={() => focusAttentionGroup(group.id)} />
+            </div>
+            <ul className="today-habit-list" id={group.id}>
+              {group.habits.map((habit) => (
+                <HabitQuickLog
+                  area={areas.find((area) => area.id === habit.areaId)}
+                  habit={habit}
+                  key={`${habit.id}:${today}`}
+                  logs={displayLogs}
+                  onLog={onLog}
+                  today={today}
+                />
+              ))}
+            </ul>
+          </div>
+        ))
       )}
     </section>
   );

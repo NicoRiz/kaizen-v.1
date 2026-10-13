@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const CHROME_PATH =
   process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -193,6 +193,7 @@ try {
     await evaluate(offline.page, `document.body.innerText.includes(${JSON.stringify(OFFLINE_ITEM)})`),
     true,
   );
+  assert.equal(await evaluate(offline.page, "document.querySelector('button.attention-badge[aria-label$=\"elementi da chiarire\"]')?.textContent"), "1");
 
   await offline.page.send("Page.reload", { ignoreCache: true });
   await wait(2000);
@@ -210,6 +211,7 @@ try {
     true,
     JSON.stringify(reloadState),
   );
+  assert.equal(await evaluate(offline.page, "document.querySelector('button.attention-badge[aria-label$=\"elementi da chiarire\"]')?.textContent"), "1");
   assert.equal(
     await evaluate(
       offline.page,
@@ -342,7 +344,9 @@ try {
 } finally {
   chrome.kill();
   await Promise.race([once(chrome, "exit"), wait(1200)]).catch(() => {});
-  await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+  if (dirname(resolve(profileDir)) === resolve(tmpdir()) && basename(profileDir).startsWith("kaizen-offline-")) {
+    await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 console.log("Offline check passed: app shell, navigation, local changes and queue persistence.");

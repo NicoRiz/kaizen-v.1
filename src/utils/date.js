@@ -20,6 +20,12 @@ export function parseDateKey(value) {
   return new Date(`${value}T00:00:00`);
 }
 
+export function millisecondsUntilTomorrow(now = new Date()) {
+  const tomorrow = new Date(now);
+  tomorrow.setHours(24, 0, 0, 0);
+  return Math.max(1, tomorrow.getTime() - now.getTime());
+}
+
 export function addDays(value, days) {
   const date = parseDateKey(value);
   date.setDate(date.getDate() + days);

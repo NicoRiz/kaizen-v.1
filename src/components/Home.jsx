@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import AttentionBadge, { focusAttentionGroup, useAttention } from "./AttentionBadge.jsx";
 import BottomNav from "./BottomNav.jsx";
 import ClarifyInboxModal from "./ClarifyInboxModal.jsx";
 import HomeSectionNav from "./HomeSectionNav.jsx";
@@ -10,6 +11,8 @@ import {
   TASK_DRAG_TYPE,
 } from "../lib/calendarScheduling.js";
 import { formatDisplayDate } from "../utils/date.js";
+import { nextActionViews } from "../lib/subActions.js";
+import ProjectActionDetails from "./ProjectActionDetails.jsx";
 
 function inboxCounterLabel(count) {
   if (count === 1) {
@@ -27,6 +30,7 @@ export default function Home({
   habitLogs,
   habits,
   nextActions,
+  projectActions,
   onAddInboxItem,
   onClarifyInboxItem,
   onNavigate,
@@ -37,6 +41,7 @@ export default function Home({
   projects,
 }) {
   const [captureText, setCaptureText] = useState("");
+  const attention = useAttention();
   const [clarifyingItem, setClarifyingItem] = useState(null);
   const [showCompletedActions, setShowCompletedActions] = useState(false);
   const [schedulingTask, setSchedulingTask] = useState(null);
@@ -46,21 +51,21 @@ export default function Home({
   );
   const activeNextActions = useMemo(
     () =>
-      nextActions
+      nextActionViews({ nextActions, projectActions, projects })
         .filter((action) => !action.completed)
         .sort((left, right) => (left.order || 0) - (right.order || 0)),
-    [nextActions],
+    [nextActions, projectActions, projects],
   );
   const completedNextActions = useMemo(
     () =>
-      nextActions
+      nextActionViews({ nextActions, projectActions, projects })
         .filter((action) => action.completed)
         .sort(
           (left, right) =>
             new Date(right.completedAt || right.createdAt) -
             new Date(left.completedAt || left.createdAt),
         ),
-    [nextActions],
+    [nextActions, projectActions, projects],
   );
 
   function handleCapture(event) {
@@ -122,9 +127,9 @@ export default function Home({
           <div className="section-heading">
             <div>
               <p className="eyebrow">Inbox</p>
-              <h2>{inboxCounterLabel(openInboxItems.length)}</h2>
+              <h2>{inboxCounterLabel(attention.inbox)}</h2>
             </div>
-            <span className="counter">{openInboxItems.length}</span>
+            <AttentionBadge count={attention.inbox} label="elementi da chiarire" onClick={() => setClarifyingItem(openInboxItems[0])} />
           </div>
 
           {openInboxItems.length === 0 ? (
@@ -152,42 +157,44 @@ export default function Home({
               <p className="eyebrow">Operativa</p>
               <h2>Prossime Azioni</h2>
             </div>
-            <span className="counter">{activeNextActions.length}</span>
+            <AttentionBadge count={attention.next} label="prossime azioni da completare" onClick={() => focusAttentionGroup("pending-next-actions")} />
           </div>
 
           {activeNextActions.length === 0 ? (
             <p className="empty-state">Nessuna prossima azione attiva.</p>
           ) : (
-            <ul className="task-list">
+            <ul className="task-list" id="pending-next-actions">
               {activeNextActions.map((action) => (
                 <li
                   className="task-item next-action-item schedulable-task"
                   draggable
-                  key={action.id}
+                  key={`${action.sourceCollection}:${action.id}`}
+                  data-project-action-id={action.sourceCollection === "projectActions" ? action.id : undefined}
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = "copy";
                     event.dataTransfer.setData(
                       TASK_DRAG_TYPE,
-                      createTaskDragPayload(action, "nextActions"),
+                      createTaskDragPayload(action, action.sourceCollection),
                     );
                   }}
                 >
                   <label className="task-check">
                     <input
                       checked={action.completed}
-                      onChange={() => onToggleNextAction(action.id)}
+                      onChange={() => onToggleNextAction(action.id, action.sourceCollection)}
                       type="checkbox"
                     />
                     <span />
                   </label>
                   <div className="task-content">
                     <strong>{action.title}</strong>
+                    {action.sourceCollection === "projectActions" && <small>Progetto: {projects.find((project) => project.id === action.projectId)?.title}</small>}
                     <AreaBadge
                       area={areas.find((area) => area.id === action.areaId)}
                       subtle
                     />
                   </div>
-                  <select
+                  {action.sourceCollection === "nextActions" && <select
                     aria-label={`Area di ${action.title}`}
                     className="inline-area-select"
                     onChange={(event) =>
@@ -199,13 +206,13 @@ export default function Home({
                     {areas.filter((area) => area.status !== "archived").map((area) => (
                       <option key={area.id} value={area.id}>{area.name}</option>
                     ))}
-                  </select>
+                  </select>}
                   <button
                     aria-label={`Pianifica ${action.title} nel calendario`}
                     className="secondary-button schedule-button"
                     onClick={() =>
                       setSchedulingTask({
-                        sourceCollection: "nextActions",
+                        sourceCollection: action.sourceCollection,
                         sourceProjectId: action.projectId || null,
                         sourceTaskId: action.id,
                         title: action.title,
@@ -216,6 +223,7 @@ export default function Home({
                   >
                     Calendario
                   </button>
+                  {action.sourceCollection === "projectActions" && <ProjectActionDetails action={action} />}
                 </li>
               ))}
             </ul>
@@ -240,17 +248,18 @@ export default function Home({
               ) : (
                 <ul className="task-list completed-action-list">
                   {completedNextActions.map((action) => (
-                    <li className="task-item is-completed" key={action.id}>
+                    <li className="task-item is-completed" data-project-action-id={action.sourceCollection === "projectActions" ? action.id : undefined} key={`${action.sourceCollection}:${action.id}`}>
                       <label className="task-check">
                         <input
                           checked={action.completed}
-                          onChange={() => onToggleNextAction(action.id)}
+                          onChange={() => onToggleNextAction(action.id, action.sourceCollection)}
                           type="checkbox"
                         />
                         <span />
                       </label>
                       <div className="task-content">
                         <strong>{action.title}</strong>
+                        {action.sourceCollection === "projectActions" && <small>Progetto: {projects.find((project) => project.id === action.projectId)?.title}</small>}
                         {action.completedAt && (
                           <small className="completed-date">
                             Completata il{" "}
@@ -262,6 +271,7 @@ export default function Home({
                           </small>
                         )}
                       </div>
+                      {action.sourceCollection === "projectActions" && <ProjectActionDetails action={action} />}
                     </li>
                   ))}
                 </ul>

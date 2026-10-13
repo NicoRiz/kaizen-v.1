@@ -28,6 +28,11 @@ import {
   upsertHabitLog,
 } from "./lib/habits.js";
 import { parseAppRoute, routeForSection } from "./lib/navigation.js";
+import { useToday } from "./hooks/useToday.js";
+import { selectAttention } from "./lib/attention.js";
+import { AttentionContext } from "./components/AttentionBadge.jsx";
+import { ProjectActionsContext } from "./components/ProjectActionDetails.jsx";
+import { applySubActionCommand } from "./lib/subActions.js";
 
 const PRIMARY_SECTIONS = {
   areas: "areas",
@@ -78,9 +83,11 @@ function currentAppRoute() {
   return parseAppRoute(typeof window !== "undefined" ? window.location.hash : "");
 }
 
-function normalizeProjectActions(projectId, actions, timestamp) {
+function normalizeProjectActions(projectId, actions, timestamp, currentActions = []) {
   return actions.map((action, index) => ({
     ...action,
+    ...(currentActions.find((item) => item.id === action.id)?.showInNextActions !== undefined
+      ? { showInNextActions: currentActions.find((item) => item.id === action.id).showInNextActions } : {}),
     id: action.id || createId(),
     projectId,
     title: action.title.trim(),
@@ -137,7 +144,8 @@ export default function App() {
     return () => window.removeEventListener("hashchange", applyRoute);
   }, []);
 
-  const today = useMemo(() => dateKey(), []);
+  const today = useToday();
+  const attention = useMemo(() => selectAttention(kaizenData, today), [kaizenData, today]);
   const {
     areas,
     archiveItems,
@@ -513,10 +521,10 @@ export default function App() {
     );
   }
 
-  function toggleNextAction(actionId) {
+  function toggleNextAction(actionId, sourceCollection = "nextActions") {
     const timestamp = nowIso();
-
-    updateCollection("nextActions", (currentActions) =>
+    const collection = sourceCollection === "projectActions" ? "projectActions" : "nextActions";
+    updateCollection(collection, (currentActions) =>
       currentActions.map((action) => {
         if (action.id !== actionId) {
           return action;
@@ -532,6 +540,18 @@ export default function App() {
         };
       }),
     );
+  }
+
+  function patchProjectAction(actionId, patch) {
+    const timestamp = nowIso();
+    updateCollection("projectActions", (actions) => actions.map((action) => action.id === actionId
+      ? { ...action, ...patch, updatedAt: timestamp,
+          ...(Object.hasOwn(patch, "completed") ? { completedAt: patch.completed ? timestamp : null } : {}) }
+      : action));
+  }
+
+  function commandSubAction(command) {
+    updateCollections(["subActions"], (data) => applySubActionCommand(data, command, { id: createId(), timestamp: nowIso() }));
   }
 
   function saveCalendarItem(itemInput) {
@@ -881,6 +901,7 @@ export default function App() {
           project.id,
           actionsInput,
           timestamp,
+          currentData.projectActions,
         );
 
         return {
@@ -913,7 +934,7 @@ export default function App() {
 
     updateCollection("projectActions", (currentActions) => [
       ...currentActions.filter((action) => action.projectId !== projectId),
-      ...normalizeProjectActions(projectId, actions, timestamp),
+      ...normalizeProjectActions(projectId, actions, timestamp, currentActions),
     ]);
   }
 
@@ -1067,7 +1088,7 @@ export default function App() {
 
   if (activeSection === PRIMARY_SECTIONS.calendar) {
     return (
-      <>
+      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
         <SyncStatus sync={sync} />
         <HomeCalendarPage
           activeSection={activeSection}
@@ -1078,13 +1099,13 @@ export default function App() {
           onSaveCalendarItem={saveCalendarItem}
           onScheduleTask={scheduleTaskInCalendar}
         />
-      </>
+      </ProjectActionsContext.Provider></AttentionContext.Provider>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.habits) {
     return (
-      <>
+      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
         <SyncStatus sync={sync} />
         <HabitsPage
           activeSection={activeSection}
@@ -1099,13 +1120,13 @@ export default function App() {
           projects={projects}
           today={today}
         />
-      </>
+      </ProjectActionsContext.Provider></AttentionContext.Provider>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.areas) {
     return (
-      <>
+      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
         <SyncStatus sync={sync} />
         <AreasPage
           activeSection={activeSection}
@@ -1120,13 +1141,13 @@ export default function App() {
           projects={projects}
           today={today}
         />
-      </>
+      </ProjectActionsContext.Provider></AttentionContext.Provider>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.progress) {
     return (
-      <>
+      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
         <SyncStatus sync={sync} />
         <ProgressPage
           activeSection={activeSection}
@@ -1137,13 +1158,13 @@ export default function App() {
           projects={projects}
           today={today}
         />
-      </>
+      </ProjectActionsContext.Provider></AttentionContext.Provider>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.gtd) {
     return (
-      <>
+      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
         <SyncStatus sync={sync} />
         <GtdPage
           activeSection={activeSection}
@@ -1170,7 +1191,7 @@ export default function App() {
           waitingFor={waitingFor}
           today={today}
         />
-      </>
+      </ProjectActionsContext.Provider></AttentionContext.Provider>
     );
   }
 
@@ -1181,7 +1202,7 @@ export default function App() {
     );
 
     return (
-      <>
+      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
         <SyncStatus sync={sync} />
         <NotesSection
           activeSection={activeSection}
@@ -1195,13 +1216,13 @@ export default function App() {
           section={activeNoteSection}
           title={activeSectionConfig.title}
         />
-      </>
+      </ProjectActionsContext.Provider></AttentionContext.Provider>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.note) {
     return (
-      <>
+      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
         <SyncStatus sync={sync} />
         <NotesHub
           activeSection={activeSection}
@@ -1210,12 +1231,12 @@ export default function App() {
           onNavigate={navigate}
           onOpenSection={(section) => navigate(PRIMARY_SECTIONS.note, section)}
         />
-      </>
+      </ProjectActionsContext.Provider></AttentionContext.Provider>
     );
   }
 
   return (
-    <>
+    <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
       <SyncStatus sync={sync} />
       <Home
         activeSection={activeSection}
@@ -1225,6 +1246,7 @@ export default function App() {
         habits={habits}
         inboxItems={inboxItems}
         nextActions={nextActions}
+        projectActions={projectActions}
         onAddInboxItem={addInboxItem}
         onClarifyInboxItem={clarifyInboxItem}
         onLogHabit={saveHabitLog}
@@ -1234,6 +1256,6 @@ export default function App() {
         onUpdateNextActionArea={updateNextActionArea}
         projects={projects.filter((project) => project.status !== "someday")}
       />
-    </>
+    </ProjectActionsContext.Provider></AttentionContext.Provider>
   );
 }

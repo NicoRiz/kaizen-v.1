@@ -1478,6 +1478,9 @@ function canonicalConflictData(data) {
 }
 
 function duplicateIdentity(record) {
+  // Revision history is not duplicate content, even when two devices made
+  // the same edit. Its IDs and causal links must survive cleanup proposals.
+  if (record.collection === "subActions") return `subActions:${record.id}`;
   const data = record.data && typeof record.data === "object" ? record.data : {};
   const originalId =
     data.conflictOf ||

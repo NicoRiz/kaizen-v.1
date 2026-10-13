@@ -13,6 +13,7 @@ export const STORAGE_KEYS = {
   inboxItems: "kaizen:v1:gtd:inboxItems",
   projects: "kaizen:v1:gtd:projects",
   projectActions: "kaizen:v1:gtd:projectActions",
+  subActions: "kaizen:v1:gtd:subActions",
   nextActions: "kaizen:v1:gtd:nextActions",
   calendarItems: "kaizen:v1:gtd:calendarItems",
   waitingFor: "kaizen:v1:gtd:waitingFor",
@@ -89,6 +90,7 @@ export const COLLECTIONS = [
     kind: "array",
     fallback: [],
   },
+  { name: "subActions", storageKey: STORAGE_KEYS.subActions, kind: "array", fallback: [] },
   {
     name: "calendarItems",
     storageKey: STORAGE_KEYS.calendarItems,

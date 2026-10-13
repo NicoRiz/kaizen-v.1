@@ -1,5 +1,6 @@
 import { normalizeJournalAnalysis } from "../src/lib/journal.js";
 import { JOURNAL_ANALYST_PROMPT } from "../src/lib/journalAnalystPrompt.js";
+import { authenticateJournalRequest, createJournalLimiter } from "../server/journalSecurity.js";
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const MAX_BODY_CHARS = 60000;
@@ -110,6 +111,11 @@ function parseBody(body) {
   }
 
   if (typeof body === "string") {
+    if (body.length > MAX_BODY_CHARS) {
+      const error = new Error("Richiesta troppo lunga.");
+      error.statusCode = 413;
+      throw error;
+    }
     return JSON.parse(body);
   }
 
@@ -189,85 +195,117 @@ function extractOutputText(result) {
   return texts.join("\n").trim();
 }
 
-export default async function handler(request, response) {
-  if (request.method !== "POST") {
-    response.setHeader("Allow", "POST");
-    return sendJson(response, 405, { error: "Metodo non consentito." });
-  }
+export function createJournalHandler({
+  env = process.env,
+  fetchImpl = (...args) => fetch(...args),
+  limiter = createJournalLimiter(),
+} = {}) {
+  return async function handler(request, response) {
+    response.setHeader("Cache-Control", "no-store");
+    if (request.method !== "POST") {
+      response.setHeader("Allow", "POST");
+      return sendJson(response, 405, { error: "Metodo non consentito." });
+    }
 
-  if (!process.env.OPENAI_API_KEY) {
-    return sendJson(response, 503, {
-      error: "Kaizen Analyst non è ancora configurato.",
-    });
-  }
+    const authentication = await authenticateJournalRequest(request, env, fetchImpl);
+    if (!authentication.userId) {
+      const { status, ...payload } = authentication;
+      return sendJson(response, status, payload);
+    }
 
-  let input;
+    if (!env.OPENAI_API_KEY) {
+      return sendJson(response, 503, {
+        error: "Kaizen Analyst non è ancora configurato.",
+      });
+    }
 
-  try {
-    input = normalizeInput(parseBody(request.body));
-  } catch (error) {
-    return sendJson(response, error.statusCode || 400, {
-      error: error.message || "Richiesta non valida.",
-    });
-  }
+    let input;
 
-  try {
-    const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
-        store: false,
-        input: [
-          {
-            role: "system",
-            content: JOURNAL_ANALYST_PROMPT,
-          },
-          {
-            role: "user",
-            content: JSON.stringify(input),
-          },
-        ],
-        max_output_tokens: 1800,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "kaizen_journal_analysis",
-            strict: true,
-            schema: ANALYSIS_SCHEMA,
-          },
+    try {
+      input = normalizeInput(parseBody(request.body));
+    } catch (error) {
+      return sendJson(response, error.statusCode || 400, {
+        error: error.statusCode ? error.message : "Richiesta non valida.",
+      });
+    }
+
+    const permit = limiter.acquire(authentication.userId);
+    if (!permit.allowed) {
+      response.setHeader("Retry-After", String(permit.retryAfter));
+      return sendJson(response, 429, { code: "ANALYSIS_LIMIT", error: "Troppe analisi ravvicinate. Riprova più tardi." });
+    }
+
+    try {
+      const openaiResponse = await fetchImpl("https://api.openai.com/v1/responses", {
+        method: "POST",
+        signal: AbortSignal.timeout(25000),
+        redirect: "error",
+        headers: {
+          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
         },
-      }),
-    });
-
-    const result = await openaiResponse.json().catch(() => ({}));
-
-    if (!openaiResponse.ok) {
-      return sendJson(response, openaiResponse.status === 401 ? 503 : 502, {
-        error:
-          openaiResponse.status === 401
-            ? "Kaizen Analyst non è ancora configurato."
-            : "Kaizen Analyst non è riuscito a completare l'analisi.",
+        body: JSON.stringify({
+          model: env.OPENAI_MODEL || DEFAULT_MODEL,
+          store: false,
+          input: [
+            {
+              role: "system",
+              content: JOURNAL_ANALYST_PROMPT,
+            },
+            {
+              role: "user",
+              content: JSON.stringify(input),
+            },
+          ],
+          max_output_tokens: 1800,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "kaizen_journal_analysis",
+              strict: true,
+              schema: ANALYSIS_SCHEMA,
+            },
+          },
+        }),
       });
-    }
 
-    const outputText = extractOutputText(result);
-    const parsed = outputText ? JSON.parse(outputText) : result.output_parsed;
-    const analysis = normalizeJournalAnalysis(parsed);
+      const result = await openaiResponse.json().catch(() => ({}));
 
-    if (!analysis) {
-      return sendJson(response, 502, {
-        error: "Kaizen Analyst ha restituito una risposta non valida.",
+      if (!openaiResponse.ok) {
+        if (result.error?.type === "insufficient_quota" || result.error?.code === "insufficient_quota") {
+          return sendJson(response, 503, { code: "AI_CREDIT_UNAVAILABLE", error: "Credito o quota AI non disponibile. Le altre funzioni di Kaizen restano operative." });
+        }
+        if (openaiResponse.status === 429) {
+          response.setHeader("Retry-After", "60");
+          return sendJson(response, 429, { code: "AI_RATE_LIMIT", error: "Servizio AI occupato. Riprova più tardi." });
+        }
+        return sendJson(response, openaiResponse.status === 401 ? 503 : 502, {
+          error:
+            openaiResponse.status === 401
+              ? "Kaizen Analyst non è ancora configurato."
+              : "Kaizen Analyst non è riuscito a completare l'analisi.",
+        });
+      }
+
+      const outputText = extractOutputText(result);
+      const parsed = outputText ? JSON.parse(outputText) : result.output_parsed;
+      const analysis = normalizeJournalAnalysis(parsed);
+
+      if (!analysis) {
+        return sendJson(response, 502, {
+          error: "Kaizen Analyst ha restituito una risposta non valida.",
+        });
+      }
+
+      return sendJson(response, 200, { analysis });
+    } catch (error) {
+      return sendJson(response, error?.name === "TimeoutError" || error?.name === "AbortError" ? 504 : 502, {
+        error: "Kaizen Analyst non è riuscito a completare l'analisi.",
       });
+    } finally {
+      permit.release();
     }
-
-    return sendJson(response, 200, { analysis });
-  } catch {
-    return sendJson(response, 502, {
-      error: "Kaizen Analyst non è riuscito a completare l'analisi.",
-    });
-  }
+  };
 }
+
+export default createJournalHandler();

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { COLLECTIONS, MIGRATION_VERSION } from "../lib/kaizenData.js";
+import { fetchAllRemoteRecords } from "../lib/remoteRecords.js";
 import {
   SUPABASE_AUTH_STORAGE_KEY,
   supabase,
@@ -166,16 +167,8 @@ export function useKaizenSync({ onReplaceData }) {
   const canUseCloud = Boolean(supabase && user && isOnline);
 
   async function fetchRemoteRecords() {
-    const { data: remoteRows, error } = await supabase
-      .from("kaizen_records")
-      .select("collection,id,data,created_at,updated_at,deleted_at,version")
-      .eq("user_id", user.id);
-
-    if (error) {
-      throw error;
-    }
-
-    return (remoteRows || []).map(deserializeRecordFromSupabase);
+    const remoteRows = await fetchAllRemoteRecords(supabase, user.id);
+    return remoteRows.map(deserializeRecordFromSupabase);
   }
 
   function writeDeviceMigrationMeta(patch) {
