@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { checkSubActions } from "./sub-actions-check.mjs";
 import { checkDayPlan } from './day-plan-check.mjs';
+import { checkNextActions } from './next-actions-check.mjs';
 import { once } from "node:events";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -192,6 +193,8 @@ async function capture(page, viewport, name) {
   });
 
   await writeFile(join(OUT_DIR, `visual-${name}.png`), Buffer.from(screenshot.data, "base64"));
+  await checkNextActions(page, name, OUT_DIR);
+  if (process.env.KAIZEN_VISUAL_SCOPE === 'next-actions') return { ...metrics.result.value, sectionChecks: {} };
   await checkAttention(page, name);
   await checkSubActions(page, name, OUT_DIR);
   console.log(`${name}: Phase 1 and 2 passed`);

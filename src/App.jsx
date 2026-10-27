@@ -35,6 +35,7 @@ import { selectAttention } from "./lib/attention.js";
 import { AttentionContext } from "./components/AttentionBadge.jsx";
 import { ProjectActionsContext } from "./components/ProjectActionDetails.jsx";
 import { applySubActionCommand } from "./lib/subActions.js";
+import { applyNextActionCommand, NEXT_ACTION_COLLECTIONS, reconcileSomedayReferences, somedayActionViews } from './lib/nextActions.js';
 
 const PRIMARY_SECTIONS = {
   areas: "areas",
@@ -291,8 +292,12 @@ export default function App() {
       return true;
     }
 
+    nextData = reconcileSomedayReferences(currentData, nextData, nowIso());
     nextData = observeDayOutcomes(currentData, nextData, today, { id: createId(), timestamp: nowIso() });
-    const changedCollections = nextData.dayPlans !== currentData.dayPlans ? [...collectionNames, 'dayPlans'] : collectionNames;
+    const changedCollections = [...new Set([...collectionNames,
+      ...(nextData.dayPlans !== currentData.dayPlans ? ['dayPlans'] : []),
+      ...(nextData.somedayMaybe !== currentData.somedayMaybe ? ['somedayMaybe'] : []),
+    ])];
     if (sync.trackDataChange(changedCollections, nextData) === false) return false;
     kaizenDataRef.current = nextData;
     setKaizenData(nextData);
@@ -589,10 +594,13 @@ export default function App() {
 
   function patchProjectAction(actionId, patch) {
     const timestamp = nowIso();
-    updateCollection("projectActions", (actions) => actions.map((action) => action.id === actionId
+    return updateCollections(['projectActions', 'somedayMaybe'], data => ({ ...data,
+      somedayMaybe: patch.showInNextActions === true ? data.somedayMaybe.filter(item => !(item.sourceCollection === 'projectActions' && item.sourceTaskId === actionId)) : data.somedayMaybe,
+      projectActions: data.projectActions.map((action) => action.id === actionId
       ? { ...action, ...patch, updatedAt: timestamp,
           ...(Object.hasOwn(patch, "completed") ? { completedAt: patch.completed ? timestamp : null } : {}) }
-      : action));
+      : action),
+    }));
   }
 
   function commandSubAction(command) {
@@ -638,15 +646,11 @@ export default function App() {
     });
   }
 
-  function updateNextActionArea(actionId, areaId) {
-    const timestamp = nowIso();
-    updateCollection("nextActions", (currentActions) =>
-      currentActions.map((action) =>
-        action.id === actionId
-          ? { ...action, areaId: areaId || null, updatedAt: timestamp }
-          : action,
-      ),
-    );
+  function commandNextAction(command) {
+    const saved = updateCollections(NEXT_ACTION_COLLECTIONS, data =>
+      applyNextActionCommand(data, command, { id: command.operationId || createId(), timestamp: nowIso(), today }));
+    if (!saved) throw new Error('La modifica non è stata salvata. Controlla lo spazio locale e riprova.');
+    return saved;
   }
 
   function saveArea(areaInput) {
@@ -1035,6 +1039,11 @@ export default function App() {
   }
 
   function saveSomedayMaybe(itemInput) {
+    const reference = kaizenDataRef.current.somedayMaybe.find(item => item.id === itemInput.id && item.sourceTaskId && ['nextActions', 'projectActions'].includes(item.sourceCollection));
+    if (reference && kaizenDataRef.current[reference.sourceCollection].some(item => item.id === reference.sourceTaskId)) {
+      const source = kaizenDataRef.current[reference.sourceCollection].find(item => item.id === reference.sourceTaskId);
+      return commandNextAction({ ...itemInput, type: 'edit', actionId: source.id, sourceCollection: reference.sourceCollection, areaId: source.areaId });
+    }
     const timestamp = nowIso();
     const cleanTitle = itemInput.title.trim();
 
@@ -1070,6 +1079,10 @@ export default function App() {
   }
 
   function deleteSomedayMaybe(itemId) {
+    const reference = kaizenDataRef.current.somedayMaybe.find(item => item.id === itemId && item.sourceCollection === 'nextActions' && item.sourceTaskId);
+    if (reference && kaizenDataRef.current.nextActions.some(item => item.id === reference.sourceTaskId)) {
+      return commandNextAction({ type: 'delete', actionId: reference.sourceTaskId, sourceCollection: 'nextActions' });
+    }
     updateCollection("somedayMaybe", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
@@ -1243,7 +1256,7 @@ export default function App() {
           onUpdateProject={updateProject}
           projectActions={projectActions}
           projects={projects}
-          somedayMaybe={somedayMaybe}
+          somedayMaybe={somedayActionViews(kaizenData)}
           waitingFor={waitingFor}
           today={today}
         />
@@ -1312,10 +1325,9 @@ export default function App() {
         onClarifyInboxItem={clarifyInboxItem}
         onLogHabit={saveHabitLog}
         onNavigate={navigate}
-        onScheduleTask={scheduleTaskInCalendar}
         onToggleNextAction={toggleNextAction}
-        onUpdateNextActionArea={updateNextActionArea}
-        projects={projects.filter((project) => project.status !== "someday")}
+        onNextActionCommand={commandNextAction}
+        projects={projects}
       />
     </ProjectActionsContext.Provider></AttentionContext.Provider>
   );

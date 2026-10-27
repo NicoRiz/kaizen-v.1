@@ -47,7 +47,7 @@ export function activeProjectActions(data) {
 // View projections only: a promoted action stays in projectActions, with its ID.
 export function nextActionViews(data) {
   return [
-    ...(data.nextActions || []).map((action) => ({ ...action, sourceCollection: "nextActions" })),
+    ...(data.nextActions || []).filter(action => action.showInNextActions !== false).map((action) => ({ ...action, sourceCollection: "nextActions" })),
     ...activeProjectActions(data).filter((action) => action.showInNextActions)
       .map((action) => ({ ...action, sourceCollection: "projectActions" })),
   ];

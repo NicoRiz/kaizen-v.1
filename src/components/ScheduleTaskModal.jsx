@@ -5,6 +5,8 @@ export default function ScheduleTaskModal({
   onClose,
   onSubmit,
   sourceTask,
+  moving = false,
+  error,
 }) {
   const [date, setDate] = useState(initialDate);
   const [startTime, setStartTime] = useState("");
@@ -48,7 +50,7 @@ export default function ScheduleTaskModal({
           {sourceTask.sourceProjectTitle && (
             <span>Progetto: {sourceTask.sourceProjectTitle}</span>
           )}
-          <small>La task originale resterà nella sua lista.</small>
+          <small>{moving ? 'L’azione verrà rimossa da Prossime azioni. I suoi dati e collegamenti saranno conservati.' : 'La task originale resterà nella sua lista.'}</small>
         </div>
 
         <form className="task-form" onSubmit={handleSubmit}>
@@ -83,12 +85,13 @@ export default function ScheduleTaskModal({
             </label>
           </div>
 
+          {error && <p role="alert">{error}</p>}
           <div className="modal-actions">
             <button className="secondary-button" onClick={onClose} type="button">
               Annulla
             </button>
             <button className="submit-button" disabled={!date} type="submit">
-              Aggiungi al calendario
+              {moving ? 'Sposta nel calendario' : 'Aggiungi al calendario'}
             </button>
           </div>
         </form>

@@ -21,7 +21,7 @@ function formatItemDate(value) {
   }).format(new Date(value));
 }
 
-function BasicItemModal({
+export function BasicItemModal({
   item,
   mode,
   onClose,
@@ -29,9 +29,13 @@ function BasicItemModal({
   titleLabel = "Titolo",
   bodyLabel = "Descrizione",
   onDownloadAttachment,
+  areas,
+  children,
+  error,
 }) {
   const [title, setTitle] = useState(item?.title || "");
-  const [body, setBody] = useState(item?.description || item?.content || "");
+  const [body, setBody] = useState(item?.description ?? item?.content ?? "");
+  const [areaId, setAreaId] = useState(item?.areaId || '');
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -45,6 +49,7 @@ function BasicItemModal({
       title,
       description: body,
       content: body,
+      ...(areas ? { areaId } : {}),
     });
   }
 
@@ -96,6 +101,11 @@ function BasicItemModal({
               value={body}
             />
           </label>
+          {areas && <label>Area opzionale<select value={areaId} onChange={event => setAreaId(event.target.value)}>
+            <option value="">Senza Area</option>
+            {areas.filter(area => area.status !== 'archived' || area.id === areaId).map(area => <option key={area.id} value={area.id}>{area.name}</option>)}
+          </select></label>}
+          {error && <p role="alert">{error}</p>}
           <div className="modal-actions">
             <button className="secondary-button" onClick={onClose} type="button">
               Annulla
@@ -105,6 +115,7 @@ function BasicItemModal({
             </button>
           </div>
         </form>
+        {children}
       </section>
     </div>
   );
@@ -600,6 +611,7 @@ function EditableList({
 }) {
   const [editingItem, setEditingItem] = useState(null);
   const [search, setSearch] = useState("");
+  const [error, setError] = useState('');
   const visibleItems = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
 
@@ -626,6 +638,8 @@ function EditableList({
         )}
       </div>
 
+      {error && !editingItem && <p role="alert">{error}</p>}
+
       {visibleItems.length === 0 ? (
         <p className="empty-state">{emptyMessage}</p>
       ) : (
@@ -634,7 +648,7 @@ function EditableList({
             <li className="note-card" key={item.id}>
               <button
                 className="note-card-main"
-                onClick={() => setEditingItem(item)}
+                onClick={() => { setError(''); setEditingItem(item); }}
                 type="button"
               >
                 <span>{formatItemDate(item.createdAt)}</span>
@@ -644,7 +658,10 @@ function EditableList({
               <button
                 aria-label={`Elimina ${item.title}`}
                 className="delete-button"
-                onClick={() => onDelete(item.id)}
+                onClick={() => {
+                  try { onDelete(item.id); setError(''); }
+                  catch (failure) { setError(failure.message); }
+                }}
                 type="button"
               >
                 x
@@ -659,12 +676,13 @@ function EditableList({
           bodyLabel={bodyLabel}
           item={editingItem}
           mode={modalTitle}
+          error={error}
           onClose={() => {
             setEditingItem(null);
           }}
           onSubmit={(itemInput) => {
-            onSave(itemInput);
-            setEditingItem(null);
+            try { onSave(itemInput); setEditingItem(null); setError(''); }
+            catch (failure) { setError(failure.message); }
           }}
           onDownloadAttachment={onDownloadAttachment}
         />

@@ -29,8 +29,9 @@ export function selectAttention(data, today) {
     .map((item) => item.conflictOf || item.id)).size;
   const activeActions = activeProjectActions(data);
   const priorityProjects = new Set(dayHeads(data.dayPlans, today).flatMap(plan => plan.priorities.filter(p => p.ref.collection === 'projectActions').map(p => p.ref.id)));
+  const priorityNext = new Set(dayHeads(data.dayPlans, today).flatMap(plan => plan.priorities.filter(p => p.ref.collection === 'nextActions').map(p => p.ref.id)));
   const belongsToFocus = action => action.showInNextActions || priorityProjects.has(action.id);
-  const next = countPendingActions(data.nextActions) + countPendingActions(activeActions.filter(belongsToFocus));
+  const next = countPendingActions((data.nextActions || []).filter(action => action.showInNextActions !== false || priorityNext.has(action.id))) + countPendingActions(activeActions.filter(belongsToFocus));
   // A shared action belongs to the Focus navigation total once promoted.
   // Its project still shows its local progress, without adding another nav item.
   const projects = countPendingActions(activeActions.filter((action) => !belongsToFocus(action)));

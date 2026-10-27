@@ -19,7 +19,7 @@ export async function checkSubActions(page, name, outDir) {
     }
     throw new Error(`Project missing after reload: ${await evaluate("location.href + '\\n' + document.body.innerText")}`);
   }
-  const root = '.task-item[data-project-action-id="project-open"]';
+  let root = '.task-item[data-project-action-id="project-open"]';
   const q = (suffix) => `document.querySelector(${JSON.stringify(`${root} ${suffix}`)})`;
   async function setInput(selector, value) {
     await act(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
@@ -61,12 +61,16 @@ export async function checkSubActions(page, name, outDir) {
   await act(`${q('.project-action-details > button')}.click()`);
   assert.equal(await evaluate("JSON.parse(localStorage.getItem('kaizen:v1:gtd:nextActions')).length"), 2, "no duplicated parent in nextActions");
   await act("document.querySelector('.bottom-nav-link[aria-label=Home]').click()");
+  await act(`${q('.next-action-menu-trigger')}.click()`);
+  await act("([...document.querySelectorAll('[role=menuitem]')].find(button => button.textContent.includes('Modifica azione'))).click()");
+  root = '.modal';
   await act(`${q('summary')}.click()`);
   assert.deepEqual(await titles(), ["Inviare proposta", "Rivedere proposta"]);
   await screenshot("focus");
   await act(`${q('.sub-action-proposal button')}.click()`);
   assert.equal(await evaluate("JSON.parse(localStorage.getItem('kaizen:v1:gtd:projectActions')).find(item => item.id === 'project-open').completed"), true);
   await act("document.querySelector('.bottom-nav-link[aria-label=GTD]').click()");
+  root = '.task-item[data-project-action-id="project-open"]';
   await act("document.querySelector('.project-toggle').click()");
   assert.equal(await parentComplete(), true, "same parent closed in project");
   await act(`${q('.task-check input')}.click()`);

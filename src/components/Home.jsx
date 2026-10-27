@@ -6,7 +6,7 @@ import AttentionBadge, { focusAttentionGroup, useAttention } from "./AttentionBa
 import BottomNav from "./BottomNav.jsx";
 import ClarifyInboxModal from "./ClarifyInboxModal.jsx";
 import HomeSectionNav from "./HomeSectionNav.jsx";
-import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
+import NextActionControls from './NextActionControls.jsx';
 import TodayHabits from "./TodayHabits.jsx";
 import { AreaBadge } from "./ProgressUi.jsx";
 import {
@@ -16,7 +16,6 @@ import {
 import { formatDisplayDate } from "../utils/date.js";
 import { nextActionViews } from "../lib/subActions.js";
 import { countPendingActions } from '../lib/attention.js';
-import ProjectActionDetails from "./ProjectActionDetails.jsx";
 
 function inboxCounterLabel(count) {
   if (count === 1) {
@@ -40,9 +39,8 @@ export default function Home({
   onClarifyInboxItem,
   onNavigate,
   onLogHabit,
-  onScheduleTask,
+  onNextActionCommand,
   onToggleNextAction,
-  onUpdateNextActionArea,
   projects,
 }) {
   const [captureText, setCaptureText] = useState("");
@@ -51,7 +49,7 @@ export default function Home({
   const priorityKeys = new Set(dayHeads(data.dayPlans, date).flatMap(plan => plan.priorities.map(p => refKey(p.ref))));
   const [clarifyingItem, setClarifyingItem] = useState(null);
   const [showCompletedActions, setShowCompletedActions] = useState(false);
-  const [schedulingTask, setSchedulingTask] = useState(null);
+  const [actionFeedback, setActionFeedback] = useState(null);
   const openInboxItems = useMemo(
     () => inboxItems.filter((item) => item.status === "open"),
     [inboxItems],
@@ -164,7 +162,7 @@ export default function Home({
           )}
         </section>
 
-        <section className="panel">
+        <section className="panel" data-next-actions-panel tabIndex={-1}>
           <div className="section-heading">
             <div>
               <p className="eyebrow">Operativa</p>
@@ -173,6 +171,7 @@ export default function Home({
             <AttentionBadge count={countPendingActions(activeNextActions)} label="prossime azioni da completare" onClick={() => focusAttentionGroup("pending-next-actions")} />
           </div>
 
+          {actionFeedback && <p className={`next-action-feedback ${actionFeedback.error ? 'is-error' : ''}`} role={actionFeedback.error ? 'alert' : 'status'}>{actionFeedback.text}</p>}
           {activeNextActions.length === 0 ? (
             <p className="empty-state">Nessuna prossima azione attiva.</p>
           ) : (
@@ -194,6 +193,7 @@ export default function Home({
                   <label className="task-check">
                     <input
                       checked={action.completed}
+                      aria-label={`Completa azione ${action.title}`}
                       onChange={() => onToggleNextAction(action.id, action.sourceCollection)}
                       type="checkbox"
                     />
@@ -207,36 +207,7 @@ export default function Home({
                       subtle
                     />
                   </div>
-                  {action.sourceCollection === "nextActions" && <select
-                    aria-label={`Area di ${action.title}`}
-                    className="inline-area-select"
-                    onChange={(event) =>
-                      onUpdateNextActionArea(action.id, event.target.value || null)
-                    }
-                    value={action.areaId || ""}
-                  >
-                    <option value="">Senza Area</option>
-                    {areas.filter((area) => area.status !== "archived").map((area) => (
-                      <option key={area.id} value={area.id}>{area.name}</option>
-                    ))}
-                  </select>}
-                  <button
-                    aria-label={`Pianifica ${action.title} nel calendario`}
-                    className="secondary-button schedule-button"
-                    onClick={() =>
-                      setSchedulingTask({
-                        sourceCollection: action.sourceCollection,
-                        sourceProjectId: action.projectId || null,
-                        sourceTaskId: action.id,
-                        title: action.title,
-                        description: action.description || action.clarifiedText || "",
-                      })
-                    }
-                    type="button"
-                  >
-                    Calendario
-                  </button>
-                  {action.sourceCollection === "projectActions" && <ProjectActionDetails action={action} />}
+                  <NextActionControls action={action} areas={areas} projects={projects} today={date} onCommand={onNextActionCommand} onFeedback={setActionFeedback} />
                 </li>
               ))}
             </ul>
@@ -261,10 +232,11 @@ export default function Home({
               ) : (
                 <ul className="task-list completed-action-list">
                   {completedNextActions.map((action) => (
-                    <li className="task-item is-completed" data-project-action-id={action.sourceCollection === "projectActions" ? action.id : undefined} key={`${action.sourceCollection}:${action.id}`}>
+                    <li className="task-item next-action-item is-completed" data-project-action-id={action.sourceCollection === "projectActions" ? action.id : undefined} key={`${action.sourceCollection}:${action.id}`}>
                       <label className="task-check">
                         <input
                           checked={action.completed}
+                          aria-label={`Riapri azione ${action.title}`}
                           onChange={() => onToggleNextAction(action.id, action.sourceCollection)}
                           type="checkbox"
                         />
@@ -284,7 +256,7 @@ export default function Home({
                           </small>
                         )}
                       </div>
-                      {action.sourceCollection === "projectActions" && <ProjectActionDetails action={action} />}
+                      <NextActionControls action={action} areas={areas} projects={projects} today={date} onCommand={onNextActionCommand} onFeedback={setActionFeedback} />
                     </li>
                   ))}
                 </ul>
@@ -305,22 +277,11 @@ export default function Home({
             await onClarifyInboxItem(clarifyingItem.id, result);
             setClarifyingItem(null);
           }}
-          projects={projects}
+          projects={projects.filter(project => project.status !== 'someday')}
           today={date}
         />
       )}
 
-      {schedulingTask && (
-        <ScheduleTaskModal
-          initialDate={date}
-          onClose={() => setSchedulingTask(null)}
-          onSubmit={(schedule) => {
-            onScheduleTask(schedulingTask, schedule);
-            setSchedulingTask(null);
-          }}
-          sourceTask={schedulingTask}
-        />
-      )}
     </div>
   );
 }
