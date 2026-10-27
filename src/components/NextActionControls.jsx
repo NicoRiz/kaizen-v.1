@@ -1,7 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BasicItemModal } from './GtdPage.jsx';
-import ProjectActionDetails from './ProjectActionDetails.jsx';
 import ScheduleTaskModal from './ScheduleTaskModal.jsx';
 import { createId } from '../lib/syncCore.js';
 
@@ -51,6 +50,7 @@ export default function NextActionControls({ action, areas, projects, today, onC
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const [dialog, setDialog] = useState(null);
   const [projectId, setProjectId] = useState('');
+  const [areaId, setAreaId] = useState(action.areaId || '');
   const [error, setError] = useState('');
 
   useLayoutEffect(() => {
@@ -102,6 +102,7 @@ export default function NextActionControls({ action, areas, projects, today, onC
     submitting.current = false;
     const operationId = createId();
     if (type === 'someday') { execute(type, {}, operationId); return; }
+    setAreaId(action.areaId || '');
     setProjectId(projects.some(project => project.id === action.projectId) ? action.projectId : projects[0]?.id || '');
     setDialog({ type, operationId });
   }
@@ -125,16 +126,19 @@ export default function NextActionControls({ action, areas, projects, today, onC
     {open && createPortal(<div id={menuId} ref={menu} role="menu" aria-label={`Gestisci ${action.title}`} className="next-action-menu" style={position} onKeyDown={menuKeys}>
       {options.map(([type, label, path]) => <button key={type} type="button" role="menuitem" tabIndex={-1}
         className={type === 'delete' ? 'next-action-menu-danger' : ''} onClick={() => choose(type)}>
-        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>{label}
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>{type === 'delete' && action.sourceCollection === 'projectActions' ? 'Rimuovi da Prossime azioni' : label}
       </button>)}
     </div>, document.body)}
     {dialog && <FocusLayer onClose={closeDialog}>
       {dialog.type === 'schedule' ? <ScheduleTaskModal moving initialDate={today} error={error} onClose={closeDialog}
         sourceTask={{ title: action.title, sourceProjectTitle: projects.find(project => project.id === action.projectId)?.title }}
         onSubmit={schedule => execute('schedule', { schedule })} />
-        : dialog.type === 'edit' ? <BasicItemModal item={{ ...action, description: action.description ?? action.clarifiedText ?? '' }} mode="Modifica azione"
-          areas={action.sourceCollection === 'nextActions' ? areas : undefined} error={error} onClose={closeDialog} onSubmit={values => execute('edit', values)}>
-          {action.sourceCollection === 'projectActions' && <ProjectActionDetails action={action} />}
+        : dialog.type === 'edit' ? <BasicItemModal item={{ ...action, description: action.description ?? action.clarifiedText ?? '', content: undefined }} mode="Modifica azione"
+          error={error} onClose={closeDialog} onSubmit={values => execute('edit', { ...values, areaId })}>
+          {action.sourceCollection === 'nextActions' && <label>Area opzionale<select value={areaId} onChange={event => setAreaId(event.target.value)}>
+            <option value="">Senza Area</option>
+            {areas.filter(area => area.status !== 'archived' || area.id === areaId).map(area => <option key={area.id} value={area.id}>{area.name}</option>)}
+          </select></label>}
         </BasicItemModal>
         : <div className="modal-backdrop" role="presentation"><section className="modal" role="dialog" aria-modal="true" aria-labelledby={`${menuId}-dialog-title`}>
           <div className="modal-heading"><h2 id={`${menuId}-dialog-title`}>{dialog.type === 'duplicate' ? 'Duplica in un progetto' : 'Elimina azione'}</h2>

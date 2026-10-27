@@ -1,12 +1,9 @@
-import { useContext, useMemo, useState } from "react";
-import TodayPlan from './TodayPlan.jsx';
-import { dayHeads, refKey } from '../lib/dayPlans.js';
-import { ProjectActionsContext } from './ProjectActionDetails.jsx';
-import AttentionBadge, { focusAttentionGroup, useAttention } from "./AttentionBadge.jsx";
+import { useMemo, useState } from "react";
 import BottomNav from "./BottomNav.jsx";
 import ClarifyInboxModal from "./ClarifyInboxModal.jsx";
 import HomeSectionNav from "./HomeSectionNav.jsx";
 import NextActionControls from './NextActionControls.jsx';
+import { nextActionViews } from '../lib/nextActions.js';
 import TodayHabits from "./TodayHabits.jsx";
 import { AreaBadge } from "./ProgressUi.jsx";
 import {
@@ -14,8 +11,6 @@ import {
   TASK_DRAG_TYPE,
 } from "../lib/calendarScheduling.js";
 import { formatDisplayDate } from "../utils/date.js";
-import { nextActionViews } from "../lib/subActions.js";
-import { countPendingActions } from '../lib/attention.js';
 
 function inboxCounterLabel(count) {
   if (count === 1) {
@@ -26,7 +21,6 @@ function inboxCounterLabel(count) {
 }
 
 export default function Home({
-  onDayCommand, onCreatePriority, onTogglePriority, onReschedulePriority, focusPlanDate,
   activeSection,
   areas,
   date,
@@ -44,9 +38,6 @@ export default function Home({
   projects,
 }) {
   const [captureText, setCaptureText] = useState("");
-  const attention = useAttention();
-  const { data } = useContext(ProjectActionsContext);
-  const priorityKeys = new Set(dayHeads(data.dayPlans, date).flatMap(plan => plan.priorities.map(p => refKey(p.ref))));
   const [clarifyingItem, setClarifyingItem] = useState(null);
   const [showCompletedActions, setShowCompletedActions] = useState(false);
   const [actionFeedback, setActionFeedback] = useState(null);
@@ -57,22 +48,20 @@ export default function Home({
   const activeNextActions = useMemo(
     () =>
       nextActionViews({ nextActions, projectActions, projects })
-        .filter(action => !priorityKeys.has(`${action.sourceCollection}:${action.id}`))
         .filter((action) => !action.completed)
         .sort((left, right) => (left.order || 0) - (right.order || 0)),
-    [nextActions, projectActions, projects, data.dayPlans, date],
+    [nextActions, projectActions, projects],
   );
   const completedNextActions = useMemo(
     () =>
       nextActionViews({ nextActions, projectActions, projects })
-        .filter(action => !priorityKeys.has(`${action.sourceCollection}:${action.id}`))
         .filter((action) => action.completed)
         .sort(
           (left, right) =>
             new Date(right.completedAt || right.createdAt) -
             new Date(left.completedAt || left.createdAt),
         ),
-    [nextActions, projectActions, projects, data.dayPlans, date],
+    [nextActions, projectActions, projects],
   );
 
   function handleCapture(event) {
@@ -92,19 +81,6 @@ export default function Home({
         </header>
 
         <HomeSectionNav activeSection="home" onNavigate={onNavigate} />
-
-        <TodayPlan today={date} initialDate={focusPlanDate} onCommand={onDayCommand} onCreate={onCreatePriority} onToggle={onTogglePriority} onReschedule={onReschedulePriority} />
-
-        <TodayHabits
-          areas={areas}
-          habits={habits}
-          logs={habitLogs}
-          onLog={onLogHabit}
-          onOpenHabits={() => onNavigate("habits")}
-          today={date}
-        />
-
-        <h2 className="other-activities-title">Altre attività</h2>
 
         <section className="panel capture-panel">
           <div className="section-heading">
@@ -134,13 +110,22 @@ export default function Home({
           </form>
         </section>
 
+        <TodayHabits
+          areas={areas}
+          habits={habits}
+          logs={habitLogs}
+          onLog={onLogHabit}
+          onOpenHabits={() => onNavigate("habits")}
+          today={date}
+        />
+
         <section className="panel">
           <div className="section-heading">
             <div>
               <p className="eyebrow">Inbox</p>
-              <h2>{inboxCounterLabel(attention.inbox)}</h2>
+              <h2>{inboxCounterLabel(openInboxItems.length)}</h2>
             </div>
-            <AttentionBadge count={attention.inbox} label="elementi da chiarire" onClick={() => setClarifyingItem(openInboxItems[0])} />
+            <span className="counter">{openInboxItems.length}</span>
           </div>
 
           {openInboxItems.length === 0 ? (
@@ -168,7 +153,7 @@ export default function Home({
               <p className="eyebrow">Operativa</p>
               <h2>Prossime Azioni</h2>
             </div>
-            <AttentionBadge count={countPendingActions(activeNextActions)} label="prossime azioni da completare" onClick={() => focusAttentionGroup("pending-next-actions")} />
+            <span className="counter">{activeNextActions.length}</span>
           </div>
 
           {actionFeedback && <p className={`next-action-feedback ${actionFeedback.error ? 'is-error' : ''}`} role={actionFeedback.error ? 'alert' : 'status'}>{actionFeedback.text}</p>}
@@ -181,7 +166,6 @@ export default function Home({
                   className="task-item next-action-item schedulable-task"
                   draggable
                   key={`${action.sourceCollection}:${action.id}`}
-                  data-project-action-id={action.sourceCollection === "projectActions" ? action.id : undefined}
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = "copy";
                     event.dataTransfer.setData(
@@ -201,7 +185,7 @@ export default function Home({
                   </label>
                   <div className="task-content">
                     <strong>{action.title}</strong>
-                    {action.sourceCollection === "projectActions" && <small>Progetto: {projects.find((project) => project.id === action.projectId)?.title}</small>}
+                    {action.sourceCollection === 'projectActions' && <small>Progetto: {projects.find(project => project.id === action.projectId)?.title}</small>}
                     <AreaBadge
                       area={areas.find((area) => area.id === action.areaId)}
                       subtle
@@ -232,7 +216,7 @@ export default function Home({
               ) : (
                 <ul className="task-list completed-action-list">
                   {completedNextActions.map((action) => (
-                    <li className="task-item next-action-item is-completed" data-project-action-id={action.sourceCollection === "projectActions" ? action.id : undefined} key={`${action.sourceCollection}:${action.id}`}>
+                    <li className="task-item next-action-item is-completed" key={`${action.sourceCollection}:${action.id}`}>
                       <label className="task-check">
                         <input
                           checked={action.completed}
@@ -244,7 +228,7 @@ export default function Home({
                       </label>
                       <div className="task-content">
                         <strong>{action.title}</strong>
-                        {action.sourceCollection === "projectActions" && <small>Progetto: {projects.find((project) => project.id === action.projectId)?.title}</small>}
+                        {action.sourceCollection === 'projectActions' && <small>Progetto: {projects.find(project => project.id === action.projectId)?.title}</small>}
                         {action.completedAt && (
                           <small className="completed-date">
                             Completata il{" "}

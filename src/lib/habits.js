@@ -74,24 +74,8 @@ export function isHabitDueOnDate(habit, value) {
   return habit.frequency === "daily" || habit.frequency === "weekly";
 }
 
-// Offline devices can create two IDs for the same habit/day. Resolve their
-// reading deterministically without deleting either saved record. Conflict
-// recovery copies do not override their original while it is still present.
-export function canonicalHabitLogs(logs) {
-  const ids = new Set(logs.map((log) => log.id));
-  const byDay = new Map();
-  for (const log of logs) {
-    if (log.conflictOf && ids.has(log.conflictOf)) continue;
-    const key = `${log.habitId}:${log.date}`;
-    const previous = byDay.get(key);
-    const rank = (item) => `${item.updatedAt || item.createdAt || ""}:${item.id || ""}`;
-    if (!previous || rank(log) > rank(previous)) byDay.set(key, log);
-  }
-  return [...byDay.values()];
-}
-
 export function logsForHabit(logs, habitId, start, end) {
-  return canonicalHabitLogs(logs).filter(
+  return logs.filter(
     (log) =>
       log.habitId === habitId &&
       (!start || log.date >= start) &&
@@ -321,7 +305,7 @@ function adjustProject(projects, projectId, delta, timestamp) {
 }
 
 export function upsertHabitLog({ habit, habitLogs, input, projects, id, timestamp }) {
-  const existing = canonicalHabitLogs(habitLogs).find(
+  const existing = habitLogs.find(
     (log) => log.habitId === habit.id && log.date === input.date,
   );
   const nextLog = {
@@ -333,7 +317,7 @@ export function upsertHabitLog({ habit, habitLogs, input, projects, id, timestam
       habit.type === "quantitative" ? Math.max(0, numericValue(input.quantity)) : null,
     completed:
       habit.type === "boolean" ? Boolean(input.completed) : numericValue(input.quantity) > 0,
-    note: input.note === undefined ? existing?.note || "" : (input.note || "").trim(),
+    note: (input.note || "").trim(),
     createdAt: existing?.createdAt || timestamp,
     updatedAt: timestamp,
   };

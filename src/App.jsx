@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { appendDay, changeDay, dayHeads, emptyDay, observeDayOutcomes, priorityCompleted, refKey } from './lib/dayPlans.js';
-import { planCalendarItems } from './lib/timeBlocking.js';
 import AuthScreen from "./components/AuthScreen.jsx";
 import AreasPage from "./components/AreasPage.jsx";
 import GtdPage from "./components/GtdPage.jsx";
@@ -30,11 +28,6 @@ import {
   upsertHabitLog,
 } from "./lib/habits.js";
 import { parseAppRoute, routeForSection } from "./lib/navigation.js";
-import { useToday } from "./hooks/useToday.js";
-import { selectAttention } from "./lib/attention.js";
-import { AttentionContext } from "./components/AttentionBadge.jsx";
-import { ProjectActionsContext } from "./components/ProjectActionDetails.jsx";
-import { applySubActionCommand } from "./lib/subActions.js";
 import { applyNextActionCommand, NEXT_ACTION_COLLECTIONS, reconcileSomedayReferences, somedayActionViews } from './lib/nextActions.js';
 
 const PRIMARY_SECTIONS = {
@@ -86,11 +79,9 @@ function currentAppRoute() {
   return parseAppRoute(typeof window !== "undefined" ? window.location.hash : "");
 }
 
-function normalizeProjectActions(projectId, actions, timestamp, currentActions = []) {
+function normalizeProjectActions(projectId, actions, timestamp) {
   return actions.map((action, index) => ({
     ...action,
-    ...(currentActions.find((item) => item.id === action.id)?.showInNextActions !== undefined
-      ? { showInNextActions: currentActions.find((item) => item.id === action.id).showInNextActions } : {}),
     id: action.id || createId(),
     projectId,
     title: action.title.trim(),
@@ -104,7 +95,6 @@ function normalizeProjectActions(projectId, actions, timestamp, currentActions =
 
 export default function App() {
   const [kaizenData, setKaizenData] = useState(initialKaizenData);
-  const [focusPlanDate, setFocusPlanDate] = useState(null);
   const kaizenDataRef = useRef(kaizenData);
   const [migration, setMigration] = useState(() =>
     readStorage(STORAGE_KEYS.migration, {}),
@@ -148,8 +138,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", applyRoute);
   }, []);
 
-  const today = useToday();
-  const attention = useMemo(() => selectAttention(kaizenData, today), [kaizenData, today]);
+  const today = useMemo(() => dateKey(), []);
   const {
     areas,
     archiveItems,
@@ -289,61 +278,17 @@ export default function App() {
     let nextData = updater(currentData);
 
     if (Object.is(currentData, nextData)) {
-      return true;
+      return;
     }
 
     nextData = reconcileSomedayReferences(currentData, nextData, nowIso());
-    nextData = observeDayOutcomes(currentData, nextData, today, { id: createId(), timestamp: nowIso() });
-    const changedCollections = [...new Set([...collectionNames,
-      ...(nextData.dayPlans !== currentData.dayPlans ? ['dayPlans'] : []),
-      ...(nextData.somedayMaybe !== currentData.somedayMaybe ? ['somedayMaybe'] : []),
-    ])];
-    if (sync.trackDataChange(changedCollections, nextData) === false) return false;
+    if (nextData.somedayMaybe !== currentData.somedayMaybe) collectionNames = [...new Set([...collectionNames, 'somedayMaybe'])];
     kaizenDataRef.current = nextData;
     setKaizenData(nextData);
-    return true;
+    sync.trackDataChange(collectionNames, nextData);
   }
 
-  function commandDay(command) {
-    return updateCollections(['dayPlans'], data => changeDay(data, command, { id: createId(), timestamp: nowIso() }));
-  }
-
-  function createPriority(title, date, baseId) {
-    if (!title.trim()) return false;
-    const timestamp = nowIso(), id = createId();
-    return updateCollections(['nextActions', 'dayPlans'], data => {
-      const next = { ...data, nextActions: [...data.nextActions, { id, title: title.trim(), completed: false, completedAt: null, order: data.nextActions.length, createdAt: timestamp, updatedAt: timestamp }] };
-      return changeDay(next, { type: 'add', date, baseId, ref: { collection: 'nextActions', id } }, { id: createId(), timestamp });
-    });
-  }
-
-  function togglePriority(priority, date) {
-    if (date !== today) return;
-    if (priority.ref.collection !== 'habits') { toggleNextAction(priority.ref.id, priority.ref.collection); return; }
-    const habit = kaizenDataRef.current.habits.find(h => h.id === priority.ref.id);
-    if (!habit) return;
-    const done = priorityCompleted(kaizenDataRef.current, priority, date);
-    saveHabitLog(habit.id, { date, completed: !done, ...(habit.type === 'quantitative' ? { quantity: done ? 0 : habit.frequency === 'weekly' ? 1 : Number(habit.target || habit.minimum || 1) } : {}) });
-  }
-
-  function reschedulePriority(priority, sourcePlan, targetDate) {
-    if (!targetDate || targetDate === sourcePlan.date) return false;
-    const timestamp = nowIso();
-    return updateCollections(['dayPlans'], data => {
-      const sourceHeads = dayHeads(data.dayPlans, sourcePlan.date), targetHeads = dayHeads(data.dayPlans, targetDate);
-      if (sourceHeads.length !== 1 || sourceHeads[0].id !== sourcePlan.id || targetHeads.length > 1) throw new Error('Il piano è cambiato o contiene conflitti. Rivedilo prima di riprogrammare.');
-      const target = targetHeads[0] || emptyDay(targetDate, sourcePlan.timeZone);
-      if (target.mode === 'rest') throw new Error('Il giorno scelto è dedicato al riposo. Modifica prima il suo piano.');
-      if (target.priorities.some(p => refKey(p.ref) === refKey(priority.ref))) throw new Error('Questa attività è già una priorità del giorno scelto.');
-      const moved = { ...priority, block: null, outcome: 'incomplete', observedAt: timestamp };
-      let next = appendDay(data, { ...target, priorities: [...target.priorities, moved], reason: 'rescheduled', rescheduledFrom: sourcePlan.date }, { id: createId(), timestamp, baseIds: target.id ? [target.id] : [] });
-      next = changeDay(next, { type: 'remove', date: sourcePlan.date, baseId: sourcePlan.id, key: refKey(priority.ref), reason: `rescheduled:${targetDate}` }, { id: createId(), timestamp });
-      return next;
-    });
-  }
-
-  function navigate(section, noteSection = null, planDate = null) {
-    setFocusPlanDate(section === PRIMARY_SECTIONS.home ? planDate : null);
+  function navigate(section, noteSection = null) {
     const nextHash = routeForSection(section, noteSection);
 
     if (window.location.hash === nextHash) {
@@ -571,10 +516,10 @@ export default function App() {
     );
   }
 
-  function toggleNextAction(actionId, sourceCollection = "nextActions") {
+  function toggleNextAction(actionId, sourceCollection = 'nextActions') {
     const timestamp = nowIso();
-    const collection = sourceCollection === "projectActions" ? "projectActions" : "nextActions";
-    updateCollection(collection, (currentActions) =>
+
+    updateCollection(sourceCollection === 'projectActions' ? 'projectActions' : 'nextActions', (currentActions) =>
       currentActions.map((action) => {
         if (action.id !== actionId) {
           return action;
@@ -592,27 +537,7 @@ export default function App() {
     );
   }
 
-  function patchProjectAction(actionId, patch) {
-    const timestamp = nowIso();
-    return updateCollections(['projectActions', 'somedayMaybe'], data => ({ ...data,
-      somedayMaybe: patch.showInNextActions === true ? data.somedayMaybe.filter(item => !(item.sourceCollection === 'projectActions' && item.sourceTaskId === actionId)) : data.somedayMaybe,
-      projectActions: data.projectActions.map((action) => action.id === actionId
-      ? { ...action, ...patch, updatedAt: timestamp,
-          ...(Object.hasOwn(patch, "completed") ? { completedAt: patch.completed ? timestamp : null } : {}) }
-      : action),
-    }));
-  }
-
-  function commandSubAction(command) {
-    updateCollections(["subActions"], (data) => applySubActionCommand(data, command, { id: createId(), timestamp: nowIso() }));
-  }
-
   function saveCalendarItem(itemInput) {
-    if (itemInput.id?.startsWith('priority:')) {
-      const block = planCalendarItems(kaizenDataRef.current).find(item => item.id === itemInput.id);
-      if (block) navigate(PRIMARY_SECTIONS.home, null, block.priorityDate);
-      return;
-    }
     const timestamp = nowIso();
     const cleanTitle = itemInput.title.trim();
 
@@ -646,11 +571,27 @@ export default function App() {
     });
   }
 
+  function updateNextActionArea(actionId, areaId) {
+    const timestamp = nowIso();
+    updateCollection("nextActions", (currentActions) =>
+      currentActions.map((action) =>
+        action.id === actionId
+          ? { ...action, areaId: areaId || null, updatedAt: timestamp }
+          : action,
+      ),
+    );
+  }
+
   function commandNextAction(command) {
-    const saved = updateCollections(NEXT_ACTION_COLLECTIONS, data =>
-      applyNextActionCommand(data, command, { id: command.operationId || createId(), timestamp: nowIso(), today }));
-    if (!saved) throw new Error('La modifica non è stata salvata. Controlla lo spazio locale e riprova.');
-    return saved;
+    const currentData = kaizenDataRef.current;
+    const nextData = applyNextActionCommand(currentData, command, { id: command.operationId || createId(), timestamp: nowIso() });
+    if (nextData === currentData) return true;
+    if (sync.trackDataChange(NEXT_ACTION_COLLECTIONS, nextData, { nextActionOperation: true }) === false) {
+      throw new Error('La modifica non è stata salvata. Controlla lo spazio locale e riprova.');
+    }
+    kaizenDataRef.current = nextData;
+    setKaizenData(nextData);
+    return true;
   }
 
   function saveArea(areaInput) {
@@ -857,11 +798,6 @@ export default function App() {
   }
 
   function deleteCalendarItem(itemId) {
-    if (itemId.startsWith('priority:')) {
-      const block = planCalendarItems(kaizenDataRef.current).find(item => item.id === itemId);
-      if (block) commandDay({ type: 'patch', date: block.priorityDate, baseId: block.priorityRevision, key: block.priorityKey, patch: { block: null } });
-      return;
-    }
     updateCollection("calendarItems", (currentItems) =>
       currentItems.filter((item) => item.id !== itemId),
     );
@@ -960,7 +896,6 @@ export default function App() {
           project.id,
           actionsInput,
           timestamp,
-          currentData.projectActions,
         );
 
         return {
@@ -993,7 +928,7 @@ export default function App() {
 
     updateCollection("projectActions", (currentActions) => [
       ...currentActions.filter((action) => action.projectId !== projectId),
-      ...normalizeProjectActions(projectId, actions, timestamp, currentActions),
+      ...normalizeProjectActions(projectId, actions, timestamp),
     ]);
   }
 
@@ -1041,8 +976,7 @@ export default function App() {
   function saveSomedayMaybe(itemInput) {
     const reference = kaizenDataRef.current.somedayMaybe.find(item => item.id === itemInput.id && item.sourceTaskId && ['nextActions', 'projectActions'].includes(item.sourceCollection));
     if (reference && kaizenDataRef.current[reference.sourceCollection].some(item => item.id === reference.sourceTaskId)) {
-      const source = kaizenDataRef.current[reference.sourceCollection].find(item => item.id === reference.sourceTaskId);
-      return commandNextAction({ ...itemInput, type: 'edit', actionId: source.id, sourceCollection: reference.sourceCollection, areaId: source.areaId });
+      return commandNextAction({ ...itemInput, type: 'edit', actionId: reference.sourceTaskId, sourceCollection: reference.sourceCollection });
     }
     const timestamp = nowIso();
     const cleanTitle = itemInput.title.trim();
@@ -1156,25 +1090,24 @@ export default function App() {
 
   if (activeSection === PRIMARY_SECTIONS.calendar) {
     return (
-      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+      <>
         <SyncStatus sync={sync} />
         <HomeCalendarPage
           activeSection={activeSection}
-          calendarItems={[...calendarItems, ...planCalendarItems(kaizenData)]}
-          onOpenPriority={(date) => navigate(PRIMARY_SECTIONS.home, null, date)}
+          calendarItems={calendarItems}
           date={today}
           onDeleteCalendarItem={deleteCalendarItem}
           onNavigate={navigate}
           onSaveCalendarItem={saveCalendarItem}
           onScheduleTask={scheduleTaskInCalendar}
         />
-      </ProjectActionsContext.Provider></AttentionContext.Provider>
+      </>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.habits) {
     return (
-      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+      <>
         <SyncStatus sync={sync} />
         <HabitsPage
           activeSection={activeSection}
@@ -1189,13 +1122,13 @@ export default function App() {
           projects={projects}
           today={today}
         />
-      </ProjectActionsContext.Provider></AttentionContext.Provider>
+      </>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.areas) {
     return (
-      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+      <>
         <SyncStatus sync={sync} />
         <AreasPage
           activeSection={activeSection}
@@ -1210,13 +1143,13 @@ export default function App() {
           projects={projects}
           today={today}
         />
-      </ProjectActionsContext.Provider></AttentionContext.Provider>
+      </>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.progress) {
     return (
-      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+      <>
         <SyncStatus sync={sync} />
         <ProgressPage
           activeSection={activeSection}
@@ -1227,13 +1160,13 @@ export default function App() {
           projects={projects}
           today={today}
         />
-      </ProjectActionsContext.Provider></AttentionContext.Provider>
+      </>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.gtd) {
     return (
-      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+      <>
         <SyncStatus sync={sync} />
         <GtdPage
           activeSection={activeSection}
@@ -1260,7 +1193,7 @@ export default function App() {
           waitingFor={waitingFor}
           today={today}
         />
-      </ProjectActionsContext.Provider></AttentionContext.Provider>
+      </>
     );
   }
 
@@ -1271,7 +1204,7 @@ export default function App() {
     );
 
     return (
-      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+      <>
         <SyncStatus sync={sync} />
         <NotesSection
           activeSection={activeSection}
@@ -1285,13 +1218,13 @@ export default function App() {
           section={activeNoteSection}
           title={activeSectionConfig.title}
         />
-      </ProjectActionsContext.Provider></AttentionContext.Provider>
+      </>
     );
   }
 
   if (activeSection === PRIMARY_SECTIONS.note) {
     return (
-      <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+      <>
         <SyncStatus sync={sync} />
         <NotesHub
           activeSection={activeSection}
@@ -1300,19 +1233,14 @@ export default function App() {
           onNavigate={navigate}
           onOpenSection={(section) => navigate(PRIMARY_SECTIONS.note, section)}
         />
-      </ProjectActionsContext.Provider></AttentionContext.Provider>
+      </>
     );
   }
 
   return (
-    <AttentionContext.Provider value={attention}><ProjectActionsContext.Provider value={{ data: kaizenData, onCommand: commandSubAction, onPatchAction: patchProjectAction }}>
+    <>
       <SyncStatus sync={sync} />
       <Home
-        onDayCommand={commandDay}
-        onCreatePriority={createPriority}
-        onTogglePriority={togglePriority}
-        onReschedulePriority={reschedulePriority}
-        focusPlanDate={focusPlanDate}
         activeSection={activeSection}
         areas={areas}
         date={today}
@@ -1325,10 +1253,12 @@ export default function App() {
         onClarifyInboxItem={clarifyInboxItem}
         onLogHabit={saveHabitLog}
         onNavigate={navigate}
+        onScheduleTask={scheduleTaskInCalendar}
         onToggleNextAction={toggleNextAction}
         onNextActionCommand={commandNextAction}
+        onUpdateNextActionArea={updateNextActionArea}
         projects={projects}
       />
-    </ProjectActionsContext.Provider></AttentionContext.Provider>
+    </>
   );
 }

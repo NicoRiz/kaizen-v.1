@@ -1,7 +1,4 @@
-import { useContext, useMemo, useState } from "react";
-import ProjectActionDetails, { OrphanSubActions, ProjectActionsContext } from "./ProjectActionDetails.jsx";
-import AttentionBadge, { useAttention } from "./AttentionBadge.jsx";
-import { countPendingActions } from "../lib/attention.js";
+import { useMemo, useState } from "react";
 import BottomNav from "./BottomNav.jsx";
 import ScheduleTaskModal from "./ScheduleTaskModal.jsx";
 import { AreaBadge, ProjectProgress } from "./ProgressUi.jsx";
@@ -29,13 +26,11 @@ export function BasicItemModal({
   titleLabel = "Titolo",
   bodyLabel = "Descrizione",
   onDownloadAttachment,
-  areas,
   children,
   error,
 }) {
   const [title, setTitle] = useState(item?.title || "");
-  const [body, setBody] = useState(item?.description ?? item?.content ?? "");
-  const [areaId, setAreaId] = useState(item?.areaId || '');
+  const [body, setBody] = useState(item?.description || item?.content || "");
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -49,7 +44,6 @@ export function BasicItemModal({
       title,
       description: body,
       content: body,
-      ...(areas ? { areaId } : {}),
     });
   }
 
@@ -101,10 +95,7 @@ export function BasicItemModal({
               value={body}
             />
           </label>
-          {areas && <label>Area opzionale<select value={areaId} onChange={event => setAreaId(event.target.value)}>
-            <option value="">Senza Area</option>
-            {areas.filter(area => area.status !== 'archived' || area.id === areaId).map(area => <option key={area.id} value={area.id}>{area.name}</option>)}
-          </select></label>}
+          {children}
           {error && <p role="alert">{error}</p>}
           <div className="modal-actions">
             <button className="secondary-button" onClick={onClose} type="button">
@@ -115,7 +106,6 @@ export function BasicItemModal({
             </button>
           </div>
         </form>
-        {children}
       </section>
     </div>
   );
@@ -438,7 +428,6 @@ function ProjectsTab({
   today,
 }) {
   const [expandedProjectIds, setExpandedProjectIds] = useState([]);
-  const actionContext = useContext(ProjectActionsContext);
   const [editingProject, setEditingProject] = useState(null);
   const [schedulingTask, setSchedulingTask] = useState(null);
 
@@ -489,7 +478,6 @@ function ProjectsTab({
                   >
                     <span aria-hidden="true">{isExpanded ? "^" : "v"}</span>
                     <strong>{project.title}</strong>
-                    {project.status !== "someday" && <AttentionBadge count={countPendingActions(actions)} label="azioni da completare" />}
                   </button>
                   <button
                     aria-label={`Modifica ${project.title}`}
@@ -522,13 +510,23 @@ function ProjectsTab({
                               action.completed ? "is-completed" : ""
                             }`}
                             key={action.id}
-                            data-project-action-id={action.id}
                           >
                             <label className="task-check">
                               <input
                                 checked={action.completed}
-                                aria-label={`Completa azione ${action.title}`}
-                                onChange={() => actionContext.onPatchAction(action.id, { completed: !action.completed })}
+                                onChange={() =>
+                                  onSaveProjectActions(
+                                    project.id,
+                                    actions.map((currentAction) =>
+                                      currentAction.id === action.id
+                                        ? {
+                                            ...currentAction,
+                                            completed: !currentAction.completed,
+                                          }
+                                        : currentAction,
+                                    ),
+                                  )
+                                }
                                 type="checkbox"
                               />
                               <span />
@@ -553,7 +551,6 @@ function ProjectsTab({
                             >
                               Calendario
                             </button>
-                            <ProjectActionDetails action={action} />
                           </li>
                         ))}
                       </ul>
@@ -639,7 +636,6 @@ function EditableList({
       </div>
 
       {error && !editingItem && <p role="alert">{error}</p>}
-
       {visibleItems.length === 0 ? (
         <p className="empty-state">{emptyMessage}</p>
       ) : (
@@ -717,7 +713,6 @@ export default function GtdPage({
   today,
 }) {
   const [activeTab, setActiveTab] = useState("projects");
-  const attention = useAttention();
 
   return (
     <div className="app-shell">
@@ -741,12 +736,10 @@ export default function GtdPage({
                 type="button"
               >
                 {tab.label}
-                {tab.key === "projects" && activeTab !== "projects" && <AttentionBadge count={attention.projects} label="azioni nei progetti da completare" />}
               </button>
             ))}
           </div>
 
-          {activeTab === "projects" && <OrphanSubActions />}
           {activeTab === "projects" && (
             <ProjectsTab
               areas={areas}

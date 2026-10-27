@@ -11,7 +11,6 @@ export default function HomeCalendarPage({
   onNavigate,
   onSaveCalendarItem,
   onScheduleTask,
-  onOpenPriority,
 }) {
   return (
     <div className="app-shell">
@@ -31,7 +30,6 @@ export default function HomeCalendarPage({
           onDeleteItem={onDeleteCalendarItem}
           onSaveItem={onSaveCalendarItem}
           onScheduleTask={onScheduleTask}
-          onOpenPriority={onOpenPriority}
           today={date}
         />
 

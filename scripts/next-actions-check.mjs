@@ -36,7 +36,6 @@ export async function checkNextActions(page, name, outDir) {
     projects: [{ id: 'p1', title: 'Progetto uno', status: 'active', createdAt: timestamp, updatedAt: timestamp }, { id: 'p2', title: 'Progetto due', status: 'someday', createdAt: timestamp, updatedAt: timestamp }],
     nextActions: [task('n', 'Azione libera'), task('move', 'Da pianificare'), task('someday', 'Da rimandare'), task('delete', 'Da eliminare')],
     projectActions: [{ ...task('pa', 'Azione collegata'), projectId: 'p1', showInNextActions: true }],
-    subActions: [{ id: 'child', entityId: 'child', parentActionId: 'pa', title: 'Dettaglio conservato', supersedes: [], completed: false, createdAt: timestamp, updatedAt: timestamp }],
     calendarItems: [], somedayMaybe: [],
   };
   await act(`(() => {
@@ -76,7 +75,11 @@ export async function checkNextActions(page, name, outDir) {
     assert.equal(actions.at(-1).projectId, 'p2');
     assert.equal(actions.at(-1).completed, false);
     assert.deepEqual((await read('nextActions')).find(a => a.id === 'n'), original);
-    const linked = actions.find(a => a.id === 'pa');
+    await act(`${row('Azione collegata')}.querySelector('input').click()`);
+    assert.equal((await read('projectActions')).find(a=>a.id==='pa').completed, true);
+    await act(`${row('Azione collegata')}.querySelector('input').click()`);
+    assert.equal((await read('projectActions')).find(a=>a.id==='pa').completed, false);
+    const linked = (await read('projectActions')).find(a=>a.id==='pa');
     for (const projectId of ['p1', 'p2']) {
       await open('Azione collegata', 'Duplica in un progetto');
       assert.equal(await evaluate('document.querySelector("[role=dialog] select").value'), 'p1');
@@ -106,7 +109,6 @@ export async function checkNextActions(page, name, outDir) {
     assert.equal((await read('somedayMaybe')).length, 2);
     assert.equal(await evaluate(`Boolean(${row('Da rimandare')})`), false);
     assert.equal((await read('projectActions')).find(a => a.id === 'pa').showInNextActions, false);
-    assert.equal((await read('subActions')).length, 1);
     await open('Da eliminare', 'Elimina azione');
     await act(`${dialogButton('Annulla')}.click()`);
     assert.equal(await evaluate('document.activeElement.classList.contains("next-action-menu-trigger")'), true, 'cancel restores focus to the invoking action');
@@ -128,17 +130,20 @@ export async function checkNextActions(page, name, outDir) {
     assert.equal((await read('projectActions')).find(a => a.id === 'pa').title, 'Collegata aggiornata');
     await act('([...document.querySelectorAll("[role=tab]")].find(b=>b.textContent.trim().startsWith("Progetti"))).click()');
     await act('document.querySelector(".project-toggle").click()');
-    const projectRow = 'document.querySelector("[data-project-action-id=pa]")';
+    const projectRow = '([...document.querySelectorAll(".project-actions .task-item")].find(row=>row.querySelector("strong").textContent === "Collegata aggiornata"))';
     assert.equal(await evaluate(`${projectRow}.querySelector('.task-content strong').textContent`), 'Collegata aggiornata');
-    await act(`${projectRow}.querySelector('.project-action-details > button').click()`);
-    assert.equal((await read('somedayMaybe')).length, 1, 'promoting a deferred source removes its someday reference');
-    await act('document.querySelector(".bottom-nav-link[aria-label=Home]").click()');
-    await open('Collegata aggiornata', 'Elimina azione');
-    assert.equal(await evaluate('document.querySelector("[role=dialog]").textContent.includes("sotto-azioni resteranno")'), true);
+    // Restore the disposable fixture's existing reference, without adding a project control.
+    await act(`(() => { const rows=JSON.parse(localStorage.getItem('kaizen:v1:gtd:projectActions')); rows.find(a=>a.id==='pa').showInNextActions=true; localStorage.setItem('kaizen:v1:gtd:projectActions',JSON.stringify(rows)); const cache=JSON.parse(localStorage.getItem('kaizen:v1:sync:cache')); cache.records.find(r=>r.collection==='projectActions' && r.id==='pa').data.showInNextActions=true; localStorage.setItem('kaizen:v1:sync:cache',JSON.stringify(cache)); location.hash='#/home/focus'; })()`);
+    await reload();
+    await open('Collegata aggiornata');
+    assert.equal(await evaluate('document.querySelectorAll("[role=menuitem]")[4].textContent.trim()'), 'Rimuovi da Prossime azioni');
+    await act('document.querySelectorAll("[role=menuitem]")[4].click()');
+    await act(`${dialogButton('Annulla')}.click()`);
+    assert.equal((await read('projectActions')).find(a=>a.id==='pa').showInNextActions, true);
+    await open('Collegata aggiornata', 'Rimuovi da Prossime azioni');
     await act(`${dialogButton('Rimuovi da Prossime azioni')}.click()`);
-    assert.equal((await read('projectActions')).some(a => a.id === 'pa'), true);
-    assert.equal((await read('subActions')).length, 1);
-    assert.equal(await evaluate('document.documentElement.scrollWidth > innerWidth'), false);
+    assert.equal((await read('projectActions')).some(a=>a.id==='pa'), true);
+    assert.equal((await read('projectActions')).find(a=>a.id==='pa').showInNextActions, false);
     await open('Azione modificata', 'Duplica in un progetto');
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', modifiers: 8 });
     assert.equal(await evaluate('Boolean(document.activeElement.closest("[role=dialog]"))'), true, 'modal retains keyboard focus');

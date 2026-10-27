@@ -438,32 +438,6 @@ h2 {
   font-weight: 800;
 }
 
-.attention-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  gap: 4px;
-  border: 0;
-  padding: 0 9px;
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-button.attention-badge { cursor: pointer; min-height: 36px; }
-.attention-badge:focus-visible { outline: 2px solid #741b34; outline-offset: 3px; }
-.bottom-nav-link, .home-section-nav button { gap: 6px; }
-.home-section-nav .attention-badge, .bottom-nav-link .attention-badge {
-  min-width: 22px;
-  height: 22px;
-  padding: 0 6px;
-  margin-left: 4px;
-  vertical-align: middle;
-}
-.habit-attention-group + .habit-attention-group { margin-top: 22px; }
-.habit-attention-group h3 { margin: 0; font-size: 0.88rem; color: #5a4548; }
-.today-panel > .section-heading { flex-wrap: wrap; }
-
 .task-counter {
   display: inline-flex;
   align-items: center;
@@ -587,71 +561,6 @@ button.attention-badge { cursor: pointer; min-height: 36px; }
   color: #7d7573;
   text-decoration: line-through;
 }
-
-.project-action-details {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  cursor: auto;
-}
-.project-action-details > .text-link-button { justify-self: start; }
-.sub-actions { border-top: 1px solid #ece3dc; padding-top: 10px; min-width: 0; }
-.sub-actions summary { cursor: pointer; color: #741b34; font-weight: 700; padding: 8px 0; }
-.sub-actions .progress-track { margin: 6px 0 12px; }
-.sub-action-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
-.sub-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #ece3dc; min-width: 0; }
-.sub-action-check { display: flex; align-items: flex-start; gap: 8px; flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
-.sub-action-check input { flex: 0 0 auto; width: 20px; height: 20px; accent-color: #741b34; }
-.sub-action-done { text-decoration: line-through; color: #7d7573; }
-.sub-action-controls { display: flex; flex-wrap: wrap; gap: 4px; }
-.sub-action-controls button { min-height: 40px; }
-.sub-action-add, .sub-action-rename { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; width: 100%; }
-.sub-action-add input, .sub-action-rename input { flex: 1 1 160px; width: 0; min-width: 0; border: 1px solid #e2d8d0; border-radius: 10px; padding: 10px; font: inherit; }
-.sub-action-proposal, .sub-action-conflict { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border-radius: 12px; background: #f7efeb; font-size: 0.85rem; }
-
-.today-plan { margin-top: 20px; }
-.today-plan small { display: block; color: #796c68; line-height: 1.5; }
-.day-date input { width: 155px; max-width: 100%; }
-.day-intro { margin: 8px 0; }
-.day-progress { font-weight: 650; color: #741b34; }
-.priority-list { list-style: none; padding: 0; display: grid; gap: 14px; }
-.priority-card { border: 1px solid #e7dcd5; padding: 16px; border-radius: 15px; background: #fffdfa; min-width: 0; }
-.priority-card.is-completed { background: #f3f6ef; }
-.priority-heading { display: flex; gap: 12px; align-items: flex-start; }
-.priority-heading > div { min-width: 0; overflow-wrap: anywhere; }
-.priority-heading strong { font-size: 1.05rem; }
-.priority-time { display: block; margin: 6px 0; color: #741b34; }
-.day-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
-.today-plan summary { cursor: pointer; color: #741b34; padding: 10px 0; font-weight: 600; }
-.day-add, .day-reschedule { display: flex; gap: 8px; margin: 12px 0; align-items: end; }
-.day-add input, .day-add select { flex: 1; min-width: 0; }
-.day-add input, .day-add select, .day-reschedule input, .day-date input { border: 1px solid #e7dcd5; border-radius: 12px; padding: 10px 12px; background: #fffdfa; color: #2d2022; font: inherit; max-width: 100%; }
-.day-add input:focus, .day-add select:focus, .day-date input:focus, .day-reschedule input:focus { outline: 2px solid #741b34; outline-offset: 2px; }
-.day-reschedule label { flex: 1; min-width: 0; display: grid; gap: 6px; }
-.day-warning, .day-conflict { padding: 12px; border-radius: 12px; background: #fff0da; overflow-wrap: anywhere; }
-.day-proposal { background: #f7efeb; border: 1px solid #e1c8c5; border-radius: 14px; padding: 16px; margin: 16px 0; }
-.priority-fixed { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; }
-.today-plan .priority-fixed input { width: 20px; height: 20px; flex: 0 0 20px; padding: 0; margin: 0; }
-.day-timeline ul, .day-history ul { list-style: none; padding: 0; display: grid; gap: 10px; }
-.day-timeline li { display: flex; gap: 14px; border-left: 3px solid #741b34; padding: 10px; background: #f8f3ed; overflow-wrap: anywhere; }
-.day-timeline strong { flex: 0 0 100px; }
-.day-history { margin-top: 12px; }
-.day-history li { border-bottom: 1px solid #e7dcd5; overflow-wrap: anywhere; }
-.other-activities-title { margin: 26px 0 0; }
-.storage-warning { position: sticky; z-index: 90; top: 0; background: #fff0da; color: #5a2525; padding: 16px; border-bottom: 2px solid #741b34; }
-@media (max-width: 600px) {
-  .today-plan .section-heading { flex-wrap: wrap; }
-  .day-add, .day-reschedule { flex-direction: column; align-items: stretch; }
-  .priority-card { padding: 12px; }
-  .today-plan .form-grid { grid-template-columns: 1fr; }
-  .day-actions > button { white-space: normal; }
-  .day-timeline li { flex-direction: column; gap: 4px; }
-  .day-timeline strong { flex: auto; }
-}
-.sub-action-conflict { width: 100%; }
-.sub-action-conflict p { margin: 0; flex-basis: 100%; }
-.orphan-sub-actions select { max-width: 100%; min-width: 0; }
 
 .task-check {
   position: relative;
@@ -2618,6 +2527,7 @@ button.attention-badge { cursor: pointer; min-height: 36px; }
     grid-template-columns: 30px minmax(0, 1fr) auto;
     min-height: 72px;
   }
+
 
   .form-grid--three {
     grid-template-columns: repeat(3, minmax(0, 1fr));
